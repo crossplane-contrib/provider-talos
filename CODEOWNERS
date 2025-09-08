@@ -3,4 +3,4 @@
 # https://help.github.com/articles/about-codeowners/
 
 # Global fallback for all files
-*   @crossplane/talos-maintainers
+*   @jaymiracola
