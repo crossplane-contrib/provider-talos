@@ -41,10 +41,10 @@ import (
 )
 
 const (
-	errNotKubeconfig    = "managed resource is not a Kubeconfig custom resource"
-	errTrackPCUsage = "cannot track ProviderConfig usage"
-	errGetPC        = "cannot get ProviderConfig"
-	errGetCreds     = "cannot get credentials"
+	errNotKubeconfig = "managed resource is not a Kubeconfig custom resource"
+	errTrackPCUsage  = "cannot track ProviderConfig usage"
+	errGetPC         = "cannot get ProviderConfig"
+	errGetCreds      = "cannot get credentials"
 
 	errNewClient = "cannot create new Service"
 )

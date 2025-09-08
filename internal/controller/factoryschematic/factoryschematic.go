@@ -41,10 +41,10 @@ import (
 )
 
 const (
-	errNotFactorySchematic    = "managed resource is not a FactorySchematic custom resource"
-	errTrackPCUsage = "cannot track ProviderConfig usage"
-	errGetPC        = "cannot get ProviderConfig"
-	errGetCreds     = "cannot get credentials"
+	errNotFactorySchematic = "managed resource is not a FactorySchematic custom resource"
+	errTrackPCUsage        = "cannot track ProviderConfig usage"
+	errGetPC               = "cannot get ProviderConfig"
+	errGetCreds            = "cannot get credentials"
 
 	errNewClient = "cannot create new Service"
 )

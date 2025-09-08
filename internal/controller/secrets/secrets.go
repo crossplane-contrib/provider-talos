@@ -43,7 +43,7 @@ import (
 )
 
 const (
-	errNotSecrets    = "managed resource is not a Secrets custom resource"
+	errNotSecrets   = "managed resource is not a Secrets custom resource"
 	errTrackPCUsage = "cannot track ProviderConfig usage"
 	errGetPC        = "cannot get ProviderConfig"
 	errGetCreds     = "cannot get credentials"
@@ -56,8 +56,8 @@ type TalosSecretsService struct{}
 
 // GenerateSecrets generates new Talos machine secrets
 type GeneratedSecrets struct {
-	Cluster    *secrets.Cluster
-	Secrets    *secrets.Bundle
+	Cluster     *secrets.Cluster
+	Secrets     *secrets.Bundle
 	TalosConfig []byte
 }
 
@@ -264,6 +264,9 @@ type GeneratedSecretsResult struct {
 
 // generateMachineSecrets generates new Talos machine secrets using the Talos SDK
 func (c *external) generateMachineSecrets(talosVersion *string) (*GeneratedSecretsResult, error) {
+	// TODO: Use talosVersion parameter to generate version-specific secrets
+	_ = talosVersion // suppress unused parameter warning until implementation
+
 	// Generate machine secrets bundle using current time
 	clock := secrets.NewClock()
 	secretsBundle, err := secrets.NewBundle(clock, nil)
@@ -311,9 +314,9 @@ func (c *external) generateMachineSecrets(talosVersion *string) (*GeneratedSecre
 		"context": "default",
 		"contexts": map[string]interface{}{
 			"default": map[string]interface{}{
-				"ca":   string(secretsBundle.Certs.OS.Crt),
-				"crt":  string(secretsBundle.Certs.OS.Crt),
-				"key":  string(secretsBundle.Certs.OS.Key),
+				"ca":  string(secretsBundle.Certs.OS.Crt),
+				"crt": string(secretsBundle.Certs.OS.Crt),
+				"key": string(secretsBundle.Certs.OS.Key),
 			},
 		},
 	}

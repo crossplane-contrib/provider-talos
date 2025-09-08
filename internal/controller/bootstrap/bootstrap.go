@@ -41,7 +41,7 @@ import (
 )
 
 const (
-	errNotBootstrap    = "managed resource is not a Bootstrap custom resource"
+	errNotBootstrap = "managed resource is not a Bootstrap custom resource"
 	errTrackPCUsage = "cannot track ProviderConfig usage"
 	errGetPC        = "cannot get ProviderConfig"
 	errGetCreds     = "cannot get credentials"

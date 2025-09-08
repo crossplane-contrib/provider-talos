@@ -41,10 +41,10 @@ import (
 )
 
 const (
-	errNotConfiguration    = "managed resource is not a Configuration custom resource"
-	errTrackPCUsage = "cannot track ProviderConfig usage"
-	errGetPC        = "cannot get ProviderConfig"
-	errGetCreds     = "cannot get credentials"
+	errNotConfiguration = "managed resource is not a Configuration custom resource"
+	errTrackPCUsage     = "cannot track ProviderConfig usage"
+	errGetPC            = "cannot get ProviderConfig"
+	errGetCreds         = "cannot get credentials"
 
 	errNewClient = "cannot create new Service"
 )
