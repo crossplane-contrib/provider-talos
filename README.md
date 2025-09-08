@@ -16,13 +16,20 @@ support for Talos cluster lifecycle management including:
 Install the provider by using the following command:
 
 ```shell
-kubectl crossplane install provider crossplane-contrib/provider-talos:latest
+up ctp provider install crossplane-contrib/provider-talos:v0.1.0
 ```
 
 Alternatively, you can use declarative installation:
 
-```shell
-kubectl apply -f examples/provider/config.yaml
+```yaml
+cat <<EOF | kubectl apply -f -
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-talos
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/provider-talos:v0.1.0
+EOF
 ```
 
 ## Configuration
