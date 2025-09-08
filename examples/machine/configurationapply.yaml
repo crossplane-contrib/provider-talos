@@ -1,0 +1,16 @@
+apiVersion: machine.talos.crossplane.io/v1alpha1
+kind: ConfigurationApply
+metadata:
+  name: example-config-apply
+spec:
+  forProvider:
+    node: "192.168.1.101"
+    configurationRef:
+      name: example-worker-config
+    clientConfiguration:
+      # These should reference actual certificates from secrets
+      caCertificate: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t..."
+      clientCertificate: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t..."
+      clientKey: "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVkt..."
+  providerConfigRef:
+    name: default

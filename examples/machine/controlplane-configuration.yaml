@@ -1,0 +1,26 @@
+apiVersion: machine.talos.crossplane.io/v1alpha1
+kind: Configuration
+metadata:
+  name: example-controlplane-config
+spec:
+  forProvider:
+    clusterName: example-cluster
+    machineType: controlplane
+    clusterEndpoint: https://192.168.1.100:6443
+    machineSecretsRef:
+      name: example-machine-secrets
+    talosVersion: v1.11.0
+    kubernetesVersion: v1.32.1
+    # Configuration patches for control plane customization
+    configPatches:
+      - |
+        cluster:
+          allowSchedulingOnControlPlanes: true
+        machine:
+          nodeLabels:
+            node.kubernetes.io/exclude-from-external-load-balancers: ""
+  providerConfigRef:
+    name: default
+  writeConnectionSecretToRef:
+    name: talos-controlplane-config
+    namespace: default

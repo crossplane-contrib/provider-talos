@@ -1,0 +1,25 @@
+apiVersion: machine.talos.crossplane.io/v1alpha1
+kind: Configuration
+metadata:
+  name: example-worker-config
+spec:
+  forProvider:
+    clusterName: example-cluster
+    machineType: worker
+    clusterEndpoint: https://192.168.1.100:6443
+    machineSecretsRef:
+      name: example-machine-secrets
+    talosVersion: v1.11.0
+    kubernetesVersion: v1.32.1
+    # Configuration patches for worker customization
+    configPatches:
+      - |
+        machine:
+          nodeLabels:
+            node-role.kubernetes.io/worker: ""
+            environment: production
+  providerConfigRef:
+    name: default
+  writeConnectionSecretToRef:
+    name: talos-worker-config
+    namespace: default

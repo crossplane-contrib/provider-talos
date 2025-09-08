@@ -1,0 +1,22 @@
+apiVersion: image.talos.crossplane.io/v1alpha1
+kind: FactorySchematic
+metadata:
+  name: example-schematic
+spec:
+  forProvider:
+    schematic: |
+      customization:
+        systemExtensions:
+          officialExtensions:
+            - siderolabs/hello-world-service
+            - siderolabs/util-linux-tools
+        extraKernelArgs:
+          - net.ifnames=0
+          - console=ttyS0
+        meta:
+          - key: 0x1
+            value: production
+          - key: 0x2 
+            value: cluster-name
+  providerConfigRef:
+    name: default

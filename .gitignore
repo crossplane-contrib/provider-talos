@@ -1,0 +1,29 @@
+# Build and cache directories
+/.cache
+/.work
+/_output
+/bin
+cover.out
+
+# Dependencies
+/vendor
+/.vendor-new
+
+# IDE files
+.vscode
+/.idea
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# Compiled binaries (should never be committed)
+/main
+/provider
+/crossplane-*
