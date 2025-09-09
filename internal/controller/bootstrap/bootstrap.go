@@ -18,8 +18,8 @@ package bootstrap
 
 import (
 	"context"
-	"fmt"
 	"crypto/tls"
+	"fmt"
 
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
@@ -179,8 +179,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	fmt.Printf("Bootstrap exists: %v, up to date: %v\n", resourceExists, resourceUpToDate)
 
 	return managed.ExternalObservation{
-		ResourceExists:   resourceExists,
-		ResourceUpToDate: resourceUpToDate,
+		ResourceExists:    resourceExists,
+		ResourceUpToDate:  resourceUpToDate,
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
@@ -254,9 +254,9 @@ func (c *external) bootstrapTalosCluster(ctx context.Context, cr *v1alpha1.Boots
 
 	// Create TLS config
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name for now
-		InsecureSkipVerify: true, // For development - should be configurable
+		Certificates:       []tls.Certificate{cert},
+		ServerName:         cr.Spec.ForProvider.Node, // Use node IP as server name for now
+		InsecureSkipVerify: true, // For development - should be configurable // nolint:gosec
 	}
 
 	// Create Talos client

@@ -1,0 +1,9 @@
+# Step 1: ProviderConfig - Basic configuration for Talos API access
+# This is needed for the provider to know how to communicate with Talos nodes
+apiVersion: talos.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: default
+spec:
+  credentials:
+    source: None
