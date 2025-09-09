@@ -1,0 +1,46 @@
+# Step 4: ConfigurationApply - Apply the configuration to the Talos machine
+apiVersion: machine.talos.crossplane.io/v1alpha1
+kind: ConfigurationApply
+metadata:
+  name: single-node-apply
+spec:
+  forProvider:
+    # Target node endpoint - the machine we're configuring
+    endpoint: "192.168.120.82"
+    
+    # Node identifier (can be IP address)
+    node: "192.168.120.82"
+    
+    # Machine configuration input - we'll need to get this from the Configuration resource
+    machineConfigurationInput: "# This should be populated with actual config from the Configuration resource"
+    
+    # Client configuration for Talos API access
+    # Using certificates from the machine secrets
+    clientConfiguration:
+      caCertificate: |
+        -----BEGIN CERTIFICATE-----
+        MIIBPjCB8aADAgECAhBkMCINgMoL15DyhL1lgXJgMAUGAytlcDAQMQ4wDAYDVQQK
+        EwV0YWxvczAeFw0yNTA5MDkxODAzMzhaFw0zNTA5MDcxODAzMzhaMBAxDjAMBgNV
+        BAoTBXRhbG9zMCowBQYDK2VwAyEA9r2CcPVULVvXG01FwKeIEigaJr9YR6gSXzJe
+        llib2UajYTBfMA4GA1UdDwEB/wQEAwIChDAdBgNVHSUEFjAUBggrBgEFBQcDAQYI
+        KwYBBQUHAwIwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQU/ujzE8hh7saxPy0c
+        ObLtubXhnxIwBQYDK2VwA0EAWnwxrZZXvOXTFpiD7IGYikpROKzNsuQEQd+4ZyOx
+        2o+ir6urtSDYFVYyVDKdvJpAzqjgDgYhYiwiu/oc5oWeAw==
+        -----END CERTIFICATE-----
+      clientCertificate: |
+        -----BEGIN CERTIFICATE-----
+        MIIBPjCB8aADAgECAhBkMCINgMoL15DyhL1lgXJgMAUGAytlcDAQMQ4wDAYDVQQK
+        EwV0YWxvczAeFw0yNTA5MDkxODAzMzhaFw0zNTA5MDcxODAzMzhaMBAxDjAMBgNV
+        BAoTBXRhbG9zMCowBQYDK2VwAyEA9r2CcPVULVvXG01FwKeIEigaJr9YR6gSXzJe
+        llib2UajYTBfMA4GA1UdDwEB/wQEAwIChDAdBgNVHSUEFjAUBggrBgEFBQcDAQYI
+        KwYBBQUHAwIwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQU/ujzE8hh7saxPy0c
+        ObLtubXhnxIwBQYDK2VwA0EAWnwxrZZXvOXTFpiD7IGYikpROKzNsuQEQd+4ZyOx
+        2o+ir6urtSDYFVYyVDKdvJpAzqjgDgYhYiwiu/oc5oWeAw==
+        -----END CERTIFICATE-----
+      clientKey: |
+        -----BEGIN ED25519 PRIVATE KEY-----
+        MC4CAQAwBQYDK2VwBCIEIDcTLHEOE70yzzXAjgeFZnGcG9nKjXbsUqX0mkxJI4OK
+        -----END ED25519 PRIVATE KEY-----
+  
+  providerConfigRef:
+    name: default

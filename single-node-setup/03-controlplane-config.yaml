@@ -1,0 +1,40 @@
+# Step 3: Configuration - Generate machine configuration for single-node control plane
+apiVersion: machine.talos.crossplane.io/v1alpha1
+kind: Configuration
+metadata:
+  name: single-node-controlplane-config
+spec:
+  forProvider:
+    # Machine type - controlplane for master node
+    machineType: "controlplane"
+    
+    # Cluster name
+    clusterName: "single-node-cluster"
+    
+    # Cluster endpoint - the IP where the Kubernetes API will be accessible
+    clusterEndpoint: "https://192.168.120.82:6443"
+    
+    # Reference to the secrets created in step 2
+    machineSecretsRef:
+      name: single-node-secrets
+    
+    # Additional configuration for single-node setup
+    configPatches:
+      - |-
+        cluster:
+          allowSchedulingOnControlPlanes: true
+          network:
+            cni:
+              name: flannel
+        machine:
+          network:
+            hostname: "single-node"
+            interfaces:
+              - interface: eth0
+                dhcp: true
+          kubelet:
+            # Allow single-node cluster
+            registerWithTaints: []
+  
+  providerConfigRef:
+    name: default

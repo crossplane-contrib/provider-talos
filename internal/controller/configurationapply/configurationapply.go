@@ -18,8 +18,8 @@ package configurationapply
 
 import (
 	"context"
-	"fmt"
 	"crypto/tls"
+	"fmt"
 	"strings"
 
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
@@ -175,7 +175,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	resourceExists := configApplied && appliedTimeExists
 
 	// Check if we have a valid machine configuration input (not placeholder)
-	hasValidConfig := cr.Spec.ForProvider.MachineConfigurationInput != "" && 
+	hasValidConfig := cr.Spec.ForProvider.MachineConfigurationInput != "" &&
 		!strings.Contains(cr.Spec.ForProvider.MachineConfigurationInput, "# This should be populated")
 
 	// Resource is up to date if it exists and has valid config
@@ -184,8 +184,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	fmt.Printf("ConfigurationApply exists: %v, up to date: %v, has valid config: %v\n", resourceExists, resourceUpToDate, hasValidConfig)
 
 	return managed.ExternalObservation{
-		ResourceExists:   resourceExists,
-		ResourceUpToDate: resourceUpToDate,
+		ResourceExists:    resourceExists,
+		ResourceUpToDate:  resourceUpToDate,
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
@@ -276,9 +276,9 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 
 	// Create TLS config
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name for now
-		InsecureSkipVerify: true, // For development - should be configurable
+		Certificates:       []tls.Certificate{cert},
+		ServerName:         cr.Spec.ForProvider.Node, // Use node IP as server name for now
+		InsecureSkipVerify: true, // For development - should be configurable // nolint:gosec
 	}
 
 	// Create Talos client

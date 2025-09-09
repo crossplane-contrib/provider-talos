@@ -175,8 +175,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	fmt.Printf("Configuration exists: %v, up to date: %v\n", resourceExists, resourceUpToDate)
 
 	return managed.ExternalObservation{
-		ResourceExists:   resourceExists,
-		ResourceUpToDate: resourceUpToDate,
+		ResourceExists:    resourceExists,
+		ResourceUpToDate:  resourceUpToDate,
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
@@ -243,7 +243,7 @@ func (c *external) Disconnect(ctx context.Context) error {
 }
 
 // generateMachineConfiguration generates a Talos machine configuration based on the provided spec
-func (c *external) generateMachineConfiguration(ctx context.Context, cr *machinev1alpha1.Configuration) (string, error) {
+func (c *external) generateMachineConfiguration(_ context.Context, cr *machinev1alpha1.Configuration) (string, error) {
 	// Get machine secrets from the referenced secret
 	secretsRef := cr.Spec.ForProvider.MachineSecretsRef
 	if secretsRef == nil {
@@ -252,7 +252,7 @@ func (c *external) generateMachineConfiguration(ctx context.Context, cr *machine
 
 	// For now, generate a basic configuration
 	// In a production implementation, we would fetch the actual secrets from the cluster
-	
+
 	// For now, return a simple placeholder configuration
 	// In a complete implementation, this would use the Talos SDK properly
 	machineConfig := "# Talos machine configuration would be generated here"
