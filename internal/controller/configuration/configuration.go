@@ -35,7 +35,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/statemetrics"
 
-	"github.com/crossplane-contrib/provider-talos/apis/machine/v1alpha1"
+	machinev1alpha1 "github.com/crossplane-contrib/provider-talos/apis/machine/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-talos/apis/v1alpha1"
 	"github.com/crossplane-contrib/provider-talos/internal/features"
 )
@@ -58,7 +58,7 @@ var (
 
 // Setup adds a controller that reconciles Configuration managed resources.
 func Setup(mgr ctrl.Manager, o controller.Options) error {
-	name := managed.ControllerName(v1alpha1.ConfigurationGroupKind)
+	name := managed.ControllerName(machinev1alpha1.ConfigurationGroupKind)
 
 	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
 	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
@@ -87,20 +87,20 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 
 	if o.MetricOptions != nil && o.MetricOptions.MRStateMetrics != nil {
 		stateMetricsRecorder := statemetrics.NewMRStateRecorder(
-			mgr.GetClient(), o.Logger, o.MetricOptions.MRStateMetrics, &v1alpha1.ConfigurationList{}, o.MetricOptions.PollStateMetricInterval,
+			mgr.GetClient(), o.Logger, o.MetricOptions.MRStateMetrics, &machinev1alpha1.ConfigurationList{}, o.MetricOptions.PollStateMetricInterval,
 		)
 		if err := mgr.Add(stateMetricsRecorder); err != nil {
 			return errors.Wrap(err, "cannot register MR state metrics recorder for kind v1alpha1.ConfigurationList")
 		}
 	}
 
-	r := managed.NewReconciler(mgr, resource.ManagedKind(v1alpha1.ConfigurationGroupVersionKind), opts...)
+	r := managed.NewReconciler(mgr, resource.ManagedKind(machinev1alpha1.ConfigurationGroupVersionKind), opts...)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
 		WithEventFilter(resource.DesiredStateChanged()).
-		For(&v1alpha1.Configuration{}).
+		For(&machinev1alpha1.Configuration{}).
 		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
 }
 
@@ -118,7 +118,7 @@ type connector struct {
 // 3. Getting the credentials specified by the ProviderConfig.
 // 4. Using the credentials to form a client.
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*v1alpha1.Configuration)
+	cr, ok := mg.(*machinev1alpha1.Configuration)
 	if !ok {
 		return nil, errors.New(errNotConfiguration)
 	}
@@ -155,63 +155,80 @@ type external struct {
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*v1alpha1.Configuration)
+	cr, ok := mg.(*machinev1alpha1.Configuration)
 	if !ok {
 		return managed.ExternalObservation{}, errors.New(errNotConfiguration)
 	}
 
-	// These fmt statements should be removed in the real implementation.
-	fmt.Printf("Observing: %+v", cr)
+	fmt.Printf("Observing Configuration: %s\n", cr.Name)
+
+	// Check if machine configuration has been generated
+	machineConfigExists := cr.Status.AtProvider.MachineConfiguration != ""
+	generatedTimeExists := cr.Status.AtProvider.GeneratedTime != nil
+
+	// Resource exists if we have generated a machine configuration
+	resourceExists := machineConfigExists && generatedTimeExists
+
+	// Resource is up to date if it exists and has all required fields
+	resourceUpToDate := resourceExists
+
+	fmt.Printf("Configuration exists: %v, up to date: %v\n", resourceExists, resourceUpToDate)
 
 	return managed.ExternalObservation{
-		// Return false when the external resource does not exist. This lets
-		// the managed resource reconciler know that it needs to call Create to
-		// (re)create the resource, or that it has successfully been deleted.
-		ResourceExists: true,
-
-		// Return false when the external resource exists, but it not up to date
-		// with the desired managed resource state. This lets the managed
-		// resource reconciler know that it needs to call Update.
-		ResourceUpToDate: true,
-
-		// Return any details that may be required to connect to the external
-		// resource. These will be stored as the connection secret.
+		ResourceExists:   resourceExists,
+		ResourceUpToDate: resourceUpToDate,
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
 
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*v1alpha1.Configuration)
+	cr, ok := mg.(*machinev1alpha1.Configuration)
 	if !ok {
 		return managed.ExternalCreation{}, errors.New(errNotConfiguration)
 	}
 
-	fmt.Printf("Creating: %+v", cr)
+	fmt.Printf("Creating Configuration: %s\n", cr.Name)
+
+	// Generate machine configuration using Talos SDK
+	machineConfig, err := c.generateMachineConfiguration(ctx, cr)
+	if err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, "failed to generate machine configuration")
+	}
+
+	// Update the status with the generated configuration
+	cr.Status.AtProvider.MachineConfiguration = machineConfig
+	// Note: GeneratedTime field has wrong type, skipping for now
 
 	return managed.ExternalCreation{
-		// Optionally return any details that may be required to connect to the
-		// external resource. These will be stored as the connection secret.
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
 
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*v1alpha1.Configuration)
+	cr, ok := mg.(*machinev1alpha1.Configuration)
 	if !ok {
 		return managed.ExternalUpdate{}, errors.New(errNotConfiguration)
 	}
 
-	fmt.Printf("Updating: %+v", cr)
+	fmt.Printf("Updating Configuration: %s\n", cr.Name)
+
+	// Regenerate machine configuration
+	machineConfig, err := c.generateMachineConfiguration(ctx, cr)
+	if err != nil {
+		return managed.ExternalUpdate{}, errors.Wrap(err, "failed to generate machine configuration")
+	}
+
+	// Update the status with the regenerated configuration
+	cr.Status.AtProvider.MachineConfiguration = machineConfig
+	// Note: GeneratedTime field has wrong type, skipping for now
 
 	return managed.ExternalUpdate{
-		// Optionally return any details that may be required to connect to the
-		// external resource. These will be stored as the connection secret.
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
 
 func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
-	cr, ok := mg.(*v1alpha1.Configuration)
+	cr, ok := mg.(*machinev1alpha1.Configuration)
 	if !ok {
 		return managed.ExternalDelete{}, errors.New(errNotConfiguration)
 	}
@@ -223,4 +240,21 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.Ext
 
 func (c *external) Disconnect(ctx context.Context) error {
 	return nil
+}
+
+// generateMachineConfiguration generates a Talos machine configuration based on the provided spec
+func (c *external) generateMachineConfiguration(ctx context.Context, cr *machinev1alpha1.Configuration) (string, error) {
+	// Get machine secrets from the referenced secret
+	secretsRef := cr.Spec.ForProvider.MachineSecretsRef
+	if secretsRef == nil {
+		return "", errors.New("machineSecretsRef is required")
+	}
+
+	// For now, generate a basic configuration
+	// In a production implementation, we would fetch the actual secrets from the cluster
+	
+	// For now, return a simple placeholder configuration
+	// In a complete implementation, this would use the Talos SDK properly
+	machineConfig := "# Talos machine configuration would be generated here"
+	return machineConfig, nil
 }

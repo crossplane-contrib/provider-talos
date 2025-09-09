@@ -19,13 +19,18 @@ package configurationapply
 import (
 	"context"
 	"fmt"
+	"crypto/tls"
+	"strings"
+
+	"github.com/siderolabs/talos/pkg/machinery/api/machine"
+	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
 
 	"github.com/crossplane/crossplane-runtime/pkg/feature"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -107,7 +112,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 // A connector is expected to produce an ExternalClient when its Connect method
 // is called.
 type connector struct {
-	kube         client.Client
+	kube         ctrlclient.Client
 	usage        resource.Tracker
 	newServiceFn func(creds []byte) (interface{}, error)
 }
@@ -160,22 +165,27 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, errors.New(errNotConfigurationApply)
 	}
 
-	// These fmt statements should be removed in the real implementation.
-	fmt.Printf("Observing: %+v", cr)
+	fmt.Printf("Observing ConfigurationApply: %s\n", cr.Name)
+
+	// Check if configuration has been applied
+	configApplied := cr.Status.AtProvider.Applied
+	appliedTimeExists := true // Always true for now since we don't have this field
+
+	// Resource exists if we have applied the configuration
+	resourceExists := configApplied && appliedTimeExists
+
+	// Check if we have a valid machine configuration input (not placeholder)
+	hasValidConfig := cr.Spec.ForProvider.MachineConfigurationInput != "" && 
+		!strings.Contains(cr.Spec.ForProvider.MachineConfigurationInput, "# This should be populated")
+
+	// Resource is up to date if it exists and has valid config
+	resourceUpToDate := resourceExists && hasValidConfig
+
+	fmt.Printf("ConfigurationApply exists: %v, up to date: %v, has valid config: %v\n", resourceExists, resourceUpToDate, hasValidConfig)
 
 	return managed.ExternalObservation{
-		// Return false when the external resource does not exist. This lets
-		// the managed resource reconciler know that it needs to call Create to
-		// (re)create the resource, or that it has successfully been deleted.
-		ResourceExists: true,
-
-		// Return false when the external resource exists, but it not up to date
-		// with the desired managed resource state. This lets the managed
-		// resource reconciler know that it needs to call Update.
-		ResourceUpToDate: true,
-
-		// Return any details that may be required to connect to the external
-		// resource. These will be stored as the connection secret.
+		ResourceExists:   resourceExists,
+		ResourceUpToDate: resourceUpToDate,
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
@@ -186,11 +196,19 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalCreation{}, errors.New(errNotConfigurationApply)
 	}
 
-	fmt.Printf("Creating: %+v", cr)
+	fmt.Printf("Applying Configuration to Node: %s\n", cr.Spec.ForProvider.Node)
+
+	// Apply configuration to the Talos machine
+	err := c.applyConfigurationToNode(ctx, cr)
+	if err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, "failed to apply configuration to node")
+	}
+
+	// Update status
+	cr.Status.AtProvider.Applied = true
+	// Note: LastAppliedTime field doesn't exist in the generated API, skipping
 
 	return managed.ExternalCreation{
-		// Optionally return any details that may be required to connect to the
-		// external resource. These will be stored as the connection secret.
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
@@ -201,11 +219,19 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalUpdate{}, errors.New(errNotConfigurationApply)
 	}
 
-	fmt.Printf("Updating: %+v", cr)
+	fmt.Printf("Updating Configuration on Node: %s\n", cr.Spec.ForProvider.Node)
+
+	// Reapply configuration to the Talos machine
+	err := c.applyConfigurationToNode(ctx, cr)
+	if err != nil {
+		return managed.ExternalUpdate{}, errors.Wrap(err, "failed to apply configuration to node")
+	}
+
+	// Update status
+	cr.Status.AtProvider.Applied = true
+	// Note: LastAppliedTime field doesn't exist in the generated API, skipping
 
 	return managed.ExternalUpdate{
-		// Optionally return any details that may be required to connect to the
-		// external resource. These will be stored as the connection secret.
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
@@ -222,5 +248,59 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.Ext
 }
 
 func (c *external) Disconnect(ctx context.Context) error {
+	return nil
+}
+
+// applyConfigurationToNode applies a Talos configuration to the specified node
+func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.ConfigurationApply) error {
+	// Get the machine configuration input
+	configInput := cr.Spec.ForProvider.MachineConfigurationInput
+	if configInput == "" || strings.Contains(configInput, "# This should be populated") {
+		return errors.New("machineConfigurationInput is empty or contains placeholder text")
+	}
+
+	// For now, skip config parsing validation
+	// In a complete implementation, this would validate the configuration
+
+	// Create TLS credentials from the client configuration
+	clientConfig := cr.Spec.ForProvider.ClientConfiguration
+	if clientConfig.ClientCertificate == "" {
+		return errors.New("clientConfiguration is required")
+	}
+
+	// Create a certificate from the provided certificates
+	cert, err := tls.X509KeyPair([]byte(clientConfig.ClientCertificate), []byte(clientConfig.ClientKey))
+	if err != nil {
+		return errors.Wrap(err, "failed to create client certificate")
+	}
+
+	// Create TLS config
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name for now
+		InsecureSkipVerify: true, // For development - should be configurable
+	}
+
+	// Create Talos client
+	endpoints := []string{cr.Spec.ForProvider.Node + ":50000"} // Default Talos port
+	talosClient, err := talosclient.New(ctx,
+		talosclient.WithTLSConfig(tlsConfig),
+		talosclient.WithEndpoints(endpoints...),
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to create Talos client")
+	}
+	defer talosClient.Close() // nolint:errcheck
+
+	// Apply the configuration to the node
+	_, err = talosClient.ApplyConfiguration(ctx, &machine.ApplyConfigurationRequest{
+		Data: []byte(configInput),
+		Mode: machine.ApplyConfigurationRequest_NO_REBOOT, // Default to no reboot
+	})
+	if err != nil {
+		return errors.Wrap(err, "failed to apply configuration to Talos node")
+	}
+
+	fmt.Printf("Successfully applied configuration to node %s\n", cr.Spec.ForProvider.Node)
 	return nil
 }
