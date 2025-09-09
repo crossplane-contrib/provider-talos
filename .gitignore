@@ -12,6 +12,7 @@ cover.out
 # IDE files
 .vscode
 /.idea
+CL*.md
 
 # OS generated files
 .DS_Store

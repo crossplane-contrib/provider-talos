@@ -198,6 +198,13 @@ jobs:
           username: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR }}
           password: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_PSW }}
 
+      - name: Login to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -245,6 +252,12 @@ jobs:
           name: output
           path: _output/**
 
-      - name: Publish Artifacts
+      - name: Publish Artifacts to Upbound and GHCR
         if: env.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR != ''
         run: make publish BRANCH_NAME=${GITHUB_REF##*/}
+
+      - name: Publish Artifacts to GHCR only
+        if: env.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR == ''
+        run: make publish BRANCH_NAME=${GITHUB_REF##*/}
+        env:
+          XPKG_REG_ORGS: ghcr.io/crossplane-contrib
