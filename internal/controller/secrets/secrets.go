@@ -19,6 +19,7 @@ package secrets
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/crossplane/crossplane-runtime/pkg/feature"
 
@@ -167,6 +168,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, errors.New(errNotSecrets)
 	}
 
+	// Debug logging
+	fmt.Printf("Observing Secrets: %s\n", cr.Name)
+	fmt.Printf("  MachineSecrets nil: %v\n", cr.Status.AtProvider.MachineSecrets == nil)
+	fmt.Printf("  ClientConfiguration nil: %v\n", cr.Status.AtProvider.ClientConfiguration == nil)
+
 	// For MachineSecrets, we consider the resource to exist if we have generated secrets in the status
 	resourceExists := cr.Status.AtProvider.MachineSecrets != nil && cr.Status.AtProvider.ClientConfiguration != nil
 	resourceUpToDate := true // Secrets are immutable once generated
@@ -191,6 +197,8 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	if !ok {
 		return managed.ExternalCreation{}, errors.New(errNotSecrets)
 	}
+
+	fmt.Printf("Creating Secrets: %s\n", cr.Name)
 
 	// Generate new machine secrets using Talos SDK
 	generatedSecrets, err := c.generateMachineSecrets(cr.Spec.ForProvider.TalosVersion)

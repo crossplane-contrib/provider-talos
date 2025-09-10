@@ -35,6 +35,8 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/statemetrics"
 
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+
 	machinev1alpha1 "github.com/crossplane-contrib/provider-talos/apis/machine/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-talos/apis/v1alpha1"
 	"github.com/crossplane-contrib/provider-talos/internal/features"
@@ -177,6 +179,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	resourceUpToDate := true
 
 	fmt.Printf("Configuration exists: %v, up to date: %v\n", resourceExists, resourceUpToDate)
+
+	// Explicitly set Ready condition since this is a local-only resource
+	if resourceExists && resourceUpToDate {
+		cr.SetConditions(xpv1.Available())
+	}
 
 	return managed.ExternalObservation{
 		ResourceExists:    resourceExists,
