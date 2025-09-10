@@ -80,17 +80,12 @@ kubectl apply -f examples/basic-demo/
 kubectl get secrets.machine.talos.crossplane.io,configurations.machine.talos.crossplane.io
 ```
 
-### Single Node Setup
-The `single-node-setup/` directory contains a **COMPLETE WORKING EXAMPLE** for a full cluster:
-
-```bash
-# Apply the complete single-node Talos cluster setup
-kubectl apply -f single-node-setup/
-
-# Watch resources become ready
-watch kubectl get configurations,configurationapplies,bootstraps,kubeconfigs,secrets \
-  -o custom-columns="NAME:.metadata.name,KIND:.kind,READY:.status.conditions[?(@.type==\"Ready\")].status,SYNCED:.status.conditions[?(@.type==\"Synced\")].status"
-```
+### Complete Examples
+For complete single-node Talos cluster examples, see the external examples directory at `/Users/jaym/talos/single-node-setup/` which contains working configurations for:
+- Complete single-node cluster setup
+- Machine configuration and bootstrap
+- Kubeconfig generation
+- Real Talos machine integration
 
 ### Real Test Results ✅
 
