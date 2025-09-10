@@ -268,7 +268,7 @@ func (c *external) retrieveKubeconfig(ctx context.Context, cr *v1alpha1.Kubeconf
 	tlsConfig := &tls.Config{
 		Certificates:       []tls.Certificate{cert},
 		ServerName:         cr.Spec.ForProvider.Node, // Use node IP as server name for now
-		InsecureSkipVerify: true, // For development - should be configurable // nolint:gosec
+		InsecureSkipVerify: true, // For development - should be configurable
 	}
 
 	// Create Talos client
