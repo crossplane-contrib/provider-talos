@@ -164,19 +164,9 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	fmt.Printf("Observing Configuration: %s\n", cr.Name)
 
-	// Generate machine configuration and update status
-	machineConfig, err := c.generateMachineConfiguration(ctx, cr)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "failed to generate machine configuration")
-	}
-
-	// Always update the status with the current configuration
-	cr.Status.AtProvider.MachineConfiguration = machineConfig
-	fmt.Printf("Generated machine configuration (length: %d)\n", len(machineConfig))
-
-	// Configuration always exists since we can generate it
-	resourceExists := true
-	resourceUpToDate := true
+	// Configuration exists if we have generated it and stored it in status
+	resourceExists := cr.Status.AtProvider.MachineConfiguration != ""
+	resourceUpToDate := true // Configuration is immutable once generated
 
 	fmt.Printf("Configuration exists: %v, up to date: %v\n", resourceExists, resourceUpToDate)
 
@@ -199,8 +189,16 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	fmt.Printf("Creating Configuration: %s\n", cr.Name)
-	// Configuration generation is handled in Observe method
-	// Nothing to actually create since this is a local operation
+
+	// Generate machine configuration only on creation
+	machineConfig, err := c.generateMachineConfiguration(ctx, cr)
+	if err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, "failed to generate machine configuration")
+	}
+
+	// Store the generated configuration in status
+	cr.Status.AtProvider.MachineConfiguration = machineConfig
+	fmt.Printf("Generated machine configuration (length: %d)\n", len(machineConfig))
 
 	return managed.ExternalCreation{
 		ConnectionDetails: managed.ConnectionDetails{},

@@ -28,6 +28,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
@@ -183,6 +184,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		connectionDetails["ca_certificate"] = []byte(cr.Status.AtProvider.ClientConfiguration.CACertificate)
 		connectionDetails["client_certificate"] = []byte(cr.Status.AtProvider.ClientConfiguration.ClientCertificate)
 		connectionDetails["client_key"] = []byte(cr.Status.AtProvider.ClientConfiguration.ClientKey)
+	}
+
+	// Set Ready condition when secrets exist
+	if resourceExists && resourceUpToDate {
+		cr.SetConditions(xpv1.Available())
 	}
 
 	return managed.ExternalObservation{
