@@ -192,7 +192,6 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	fmt.Printf("Creating Configuration: %s\n", cr.Name)
-	
 	// Configuration generation is handled in Observe method
 	// Nothing to actually create since this is a local operation
 
@@ -240,6 +239,8 @@ func (c *external) Disconnect(ctx context.Context) error {
 }
 
 // generateMachineConfiguration generates a Talos machine configuration based on the provided spec
+//
+//nolint:unparam // Error return type maintained for future error handling
 func (c *external) generateMachineConfiguration(_ context.Context, cr *machinev1alpha1.Configuration) (string, error) {
 	// Get cluster name - use default if not provided
 	clusterName := "talos-cluster"
@@ -361,12 +362,12 @@ cluster:
   inlineManifests: []
   extraManifests: []
   extraManifestHeaders: {}
-`, 
-		"talos-cluster-123",     // cluster.id
-		"cluster-secret-456",    // cluster.secret 
-		clusterEndpoint,         // cluster.controlPlane.endpoint
-		clusterName,            // cluster.clusterName
-		"bootstrap-token-789",   // cluster.token
+`,
+		"talos-cluster-123",   // cluster.id
+		"cluster-secret-456",  // cluster.secret
+		clusterEndpoint,       // cluster.controlPlane.endpoint
+		clusterName,           // cluster.clusterName
+		"bootstrap-token-789", // cluster.token
 	)
 
 	return machineConfig, nil

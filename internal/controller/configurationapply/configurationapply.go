@@ -276,9 +276,9 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 
 	// Create TLS config
 	tlsConfig := &tls.Config{
-		Certificates:       []tls.Certificate{cert},
-		ServerName:         cr.Spec.ForProvider.Node, // Use node IP as server name for now
-		InsecureSkipVerify: true, // For development - should be configurable
+		Certificates: []tls.Certificate{cert},
+		ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name
+		MinVersion:   tls.VersionTLS12,
 	}
 
 	// Create Talos client
