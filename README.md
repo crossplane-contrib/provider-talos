@@ -1,39 +1,35 @@
-# Talos Crossplane Provider ✅ **WORKING**
+# Crossplane Provider Talos
 
-`provider-talos` is a [Crossplane](https://crossplane.io/) Provider for managing
-[Talos Linux](https://www.talos.dev/) infrastructure. It provides comprehensive
-support for Talos cluster lifecycle management including:
+`provider-talos` is a [Crossplane](https://crossplane.io/) infrastructure provider
+for [Talos Linux](https://www.talos.dev/). Built with [Upjet](https://github.com/upbound/upjet),
+it exposes XRM-conformant managed resources for the Talos API.
 
-## ✅ **SUCCESS: Fully Functional Provider**
+## Overview
 
-This provider **SUCCESSFULLY WORKS** and demonstrates:
+The Talos provider enables platform teams to create and configure Talos Linux
+infrastructure using Kubernetes APIs. This provider leverages the official
+[siderolabs/terraform-provider-talos](https://github.com/siderolabs/terraform-provider-talos)
+to offer comprehensive Talos cluster lifecycle management.
 
-- ✅ **Real Talos SDK Integration**: Direct API communication with Talos machines
-- ✅ **TLS Certificate Authentication**: Secure client certificate-based authentication  
-- ✅ **Live Machine Management**: Connects to actual Talos machines (tested with 192.168.120.82)
-- ✅ **Configuration Application**: Real configuration deployment via Talos API
-- ✅ **Error Handling**: Proper gRPC error responses from Talos machines
-- ✅ **All Managed Resources SYNCED**: Demonstrates complete lifecycle management
+## Features
 
-- **MachineSecrets** - Generate and manage machine secrets for Talos clusters
-- **Configuration** - Generate Talos machine configurations for control plane and worker nodes
-- **ConfigurationApply** - Apply machine configurations to Talos nodes
+The provider includes support for these resources:
+
+- **Machine Secrets** - Generate and manage machine secrets for Talos clusters
+- **Machine Configuration** - Generate Talos machine configurations for control plane and worker nodes  
+- **Configuration Apply** - Apply machine configurations to Talos nodes
 - **Bootstrap** - Bootstrap Talos nodes to initialize the cluster
-- **ClusterKubeconfig** - Manage Kubernetes configuration access for Talos clusters
-- **ImageFactorySchematic** - Create custom Talos images through the Image Factory
+- **Cluster Kubeconfig** - Retrieve Kubernetes configuration from Talos clusters
+- **Image Factory Schematic** - Create custom Talos images through the Image Factory
 
-## Installation
+## Getting Started
 
-Install the provider by using the following command:
+### Installation
+
+Install the provider by using the following command after installing Crossplane:
 
 ```shell
-up ctp provider install crossplane-contrib/provider-talos:v0.1.0
-```
-
-Alternatively, you can use declarative installation:
-
-```yaml
-cat <<EOF | kubectl apply -f -
+kubectl apply -f -<<EOF
 apiVersion: pkg.crossplane.io/v1
 kind: Provider
 metadata:
@@ -43,117 +39,121 @@ spec:
 EOF
 ```
 
-## Configuration
+Notice that the provider is installed in the crossplane-system namespace alongside Crossplane.
 
-1. Create a ProviderConfig with your Talos cluster credentials:
+### Configuration
+
+Create a ProviderConfig with your Talos cluster connection details:
 
 ```yaml
-apiVersion: talos.crossplane.io/v1alpha1
+apiVersion: talos.crossplane.io/v1beta1
 kind: ProviderConfig
 metadata:
   name: default
 spec:
-  # Provider configuration here
+  # Connection details for the Talos cluster
+  configuration:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: talos-credentials
+      key: credentials
 ```
 
-2. Create a Secret with your Talos certificates:
+Create a Secret containing your Talos client configuration:
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: talos-creds
+  name: talos-credentials
   namespace: crossplane-system
 type: Opaque
-data:
-  # Base64 encoded certificates and keys
+stringData:
+  credentials: |
+    context: mycluster
+    contexts:
+      mycluster:
+        endpoints:
+          - 192.168.1.100
+        ca: LS0tLS1CRUdJTi0t...
+        crt: LS0tLS1CRUdJTi0t...
+        key: LS0tLS1CRUdJTi0t...
 ```
-
-## 🚀 **Working Examples**
-
-### Basic Demo (Recommended)
-The `examples/basic-demo/` directory contains a **SIMPLE WORKING DEMO** that demonstrates the provider without needing actual Talos machines:
-
-```bash
-# Quick test - should show SYNCED=True for both resources
-kubectl apply -f examples/basic-demo/
-kubectl get secrets.machine.talos.crossplane.io,configurations.machine.talos.crossplane.io
-```
-
-### Complete Examples
-For complete single-node Talos cluster examples, see the external examples directory at `/Users/jaym/talos/single-node-setup/` which contains working configurations for:
-- Complete single-node cluster setup
-- Machine configuration and bootstrap
-- Kubeconfig generation
-- Real Talos machine integration
-
-### Real Test Results ✅
-
-**Provider successfully connects to Talos machine 192.168.120.82:**
-```
-Successfully applied configuration to node 192.168.120.82
-Observing ConfigurationApply: single-node-apply  
-External resource is up to date
-```
-
-**All managed resources achieve SYNCED=True status:**
-- ✅ Secrets: True
-- ✅ Configuration: True  
-- ✅ ConfigurationApply: Applied successfully
-- ✅ Bootstrap: Ready for execution
-- ✅ Kubeconfig: Ready for retrieval
 
 ## Usage
 
-See the [examples](examples/) directory for additional sample manifests that create Talos infrastructure resources.
+### Basic Example
+
+Here's a simple example that generates machine secrets for a Talos cluster:
+
+```yaml
+apiVersion: machine.talos.crossplane.io/v1alpha1
+kind: Secrets
+metadata:
+  name: example-secrets
+spec:
+  forProvider:
+    talosVersion: v1.8.0
+  providerConfigRef:
+    name: default
+```
+
+Additional examples can be found in the [examples](examples/) directory.
 
 ## Developing
 
-Run the following command to build and run the provider locally:
-
-```shell
-make run
-```
-
 ### Building
 
-Run the following command to build the provider:
+Build the provider:
 
 ```shell
 make build
 ```
 
-### Local Development
+### Running Locally
 
-To set up a local development environment:
+Run the provider locally:
 
 ```shell
-# Initialize build submodules
-make submodules
+make run
+```
 
-# Create a local kind cluster and start controllers
-make dev
+### Testing
 
-# Run tests
+Run tests:
+
+```shell
 make test
-
-# Run lints and tests
-make reviewable
 ```
 
-### Cleanup
+### Code Generation
 
-To clean up the local development environment:
+Generate code from the Terraform provider schema:
 
 ```shell
-make dev-clean
+make generate
 ```
+
+This will update generated code in the `apis/` and `internal/` directories.
+
+## Community
+
+Like all Crossplane projects, this provider is driven by the community. If you have questions or feedback, please reach out:
+
+- Crossplane [Forums](https://github.com/crossplane/crossplane/discussions)
+- [Crossplane Slack](https://slack.crossplane.io/)
+- [Twitter](https://twitter.com/crossplane_io)
+- [Email](mailto:info@crossplane.io)
 
 ## Contributing
 
-Refer to Crossplane's [CONTRIBUTING.md] file for more information on how the
-Crossplane community prefers to work. The [Provider Development][provider-dev]
-guide may also be of use.
+provider-talos is a community driven project and we welcome contributions. See the Crossplane [Contributing](https://github.com/crossplane/crossplane/blob/master/CONTRIBUTING.md) guidelines to get started.
 
-[CONTRIBUTING.md]: https://github.com/crossplane/crossplane/blob/master/CONTRIBUTING.md
-[provider-dev]: https://github.com/crossplane/crossplane/blob/master/contributing/guide-provider-development.md
+## Report a Bug
+
+For filing bugs, suggesting improvements, or requesting new features, please open an [issue](https://github.com/crossplane-contrib/provider-talos/issues).
+
+## License
+
+provider-talos is under the Apache 2.0 license.
