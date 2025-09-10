@@ -1,0 +1,14 @@
+# Basic Demo: Step 2 - Generate machine configuration
+apiVersion: machine.talos.crossplane.io/v1alpha1
+kind: Configuration
+metadata:
+  name: demo-config
+spec:
+  forProvider:
+    clusterName: demo-cluster
+    clusterEndpoint: https://192.168.1.100:6443
+    machineType: controlplane
+    machineSecretsRef:
+      name: demo-secrets
+  providerConfigRef:
+    name: default

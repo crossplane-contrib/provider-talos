@@ -278,7 +278,7 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 	tlsConfig := &tls.Config{
 		Certificates:       []tls.Certificate{cert},
 		ServerName:         cr.Spec.ForProvider.Node, // Use node IP as server name for now
-		InsecureSkipVerify: true, // For development - should be configurable // nolint:gosec
+		InsecureSkipVerify: true, // For development - should be configurable
 	}
 
 	// Create Talos client
@@ -295,7 +295,7 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 	// Apply the configuration to the node
 	_, err = talosClient.ApplyConfiguration(ctx, &machine.ApplyConfigurationRequest{
 		Data: []byte(configInput),
-		Mode: machine.ApplyConfigurationRequest_NO_REBOOT, // Default to no reboot
+		Mode: machine.ApplyConfigurationRequest_REBOOT, // Required for maintenance mode
 	})
 	if err != nil {
 		return errors.Wrap(err, "failed to apply configuration to Talos node")

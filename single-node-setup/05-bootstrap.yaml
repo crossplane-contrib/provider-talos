@@ -6,8 +6,8 @@ metadata:
 spec:
   forProvider:
     # Target the control plane node
-    node: "192.168.120.82"
-    endpoint: "192.168.120.82"
+    node: "192.168.120.83"
+    endpoint: "192.168.120.83"
     
     # Client configuration - using certificates from the machine secrets
     clientConfiguration:
