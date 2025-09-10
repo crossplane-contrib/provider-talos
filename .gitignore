@@ -28,3 +28,11 @@ Thumbs.db
 /main
 /provider
 /crossplane-*
+
+# Test and configuration files (should never be committed)
+talosconfig
+*.yaml
+!examples/**/*.yaml
+!package/**/*.yaml
+!.github/**/*.yaml
+!cluster/**/*.yaml
