@@ -27,6 +27,8 @@ import (
 
 // ConfigurationParameters are the configurable fields of a Configuration.
 type ConfigurationParameters struct {
+	// Node is the Talos node endpoint for configuration management (required)
+	Node string `json:"node"`
 	// ClusterName is the Kubernetes cluster name (required)
 	ClusterName string `json:"clusterName"`
 	// MachineType is the machine type: control plane or worker (required)

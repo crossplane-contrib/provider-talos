@@ -27,6 +27,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/feature"
 
 	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -168,7 +169,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	// Check if cluster has been bootstrapped
 	clusterBootstrapped := cr.Status.AtProvider.Bootstrapped
-	bootstrapTimeExists := true // Always true for now since we don't have this field
+	bootstrapTimeExists := cr.Status.AtProvider.BootstrapTime != nil
 
 	// Resource exists if we have bootstrapped the cluster
 	resourceExists := clusterBootstrapped && bootstrapTimeExists
@@ -201,7 +202,8 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	// Update status
 	cr.Status.AtProvider.Bootstrapped = true
-	// Note: LastBootstrapTime field doesn't exist in the generated API, skipping
+	now := metav1.Now()
+	cr.Status.AtProvider.BootstrapTime = &now
 
 	return managed.ExternalCreation{
 		ConnectionDetails: managed.ConnectionDetails{},
@@ -246,29 +248,53 @@ func (c *external) bootstrapTalosCluster(ctx context.Context, cr *v1alpha1.Boots
 		return errors.New("clientConfiguration is required")
 	}
 
-	// Create a certificate from the provided certificates
-	cert, err := tls.X509KeyPair([]byte(clientConfig.ClientCertificate), []byte(clientConfig.ClientKey))
-	if err != nil {
-		return errors.Wrap(err, "failed to create client certificate")
+	// Determine endpoint - use provided endpoint or default to node:50000
+	endpoint := cr.Spec.ForProvider.Node + ":50000"
+	if cr.Spec.ForProvider.Endpoint != nil && *cr.Spec.ForProvider.Endpoint != "" {
+		endpoint = *cr.Spec.ForProvider.Endpoint
 	}
 
-	// Create TLS config
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name
-		MinVersion:   tls.VersionTLS12,
+	// Handle insecure mode (when certificates are "insecure")
+	var talosClient *talosclient.Client
+	var err error
+
+	if clientConfig.ClientCertificate == "insecure" || clientConfig.CACertificate == "insecure" {
+		fmt.Printf("Using insecure connection to %s\n", endpoint)
+		// Create insecure client
+		talosClient, err = talosclient.New(ctx,
+			talosclient.WithEndpoints(endpoint),
+			talosclient.WithTLSConfig(&tls.Config{
+				InsecureSkipVerify: true,
+			}),
+		)
+	} else {
+		fmt.Printf("Using secure connection to %s\n", endpoint)
+		// Create a certificate from the provided certificates
+		cert, certErr := tls.X509KeyPair([]byte(clientConfig.ClientCertificate), []byte(clientConfig.ClientKey))
+		if certErr != nil {
+			return errors.Wrap(certErr, "failed to create client certificate")
+		}
+
+		// Create TLS config
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name
+			MinVersion:   tls.VersionTLS12,
+		}
+
+		// Create Talos client
+		talosClient, err = talosclient.New(ctx,
+			talosclient.WithTLSConfig(tlsConfig),
+			talosclient.WithEndpoints(endpoint),
+		)
 	}
 
-	// Create Talos client
-	endpoints := []string{cr.Spec.ForProvider.Node + ":50000"} // Default Talos port
-	talosClient, err := talosclient.New(ctx,
-		talosclient.WithTLSConfig(tlsConfig),
-		talosclient.WithEndpoints(endpoints...),
-	)
 	if err != nil {
 		return errors.Wrap(err, "failed to create Talos client")
 	}
 	defer talosClient.Close() // nolint:errcheck
+
+	fmt.Printf("Attempting to bootstrap Talos cluster on endpoint %s\n", endpoint)
 
 	// Bootstrap the cluster
 	err = talosClient.Bootstrap(ctx, &machine.BootstrapRequest{})
@@ -276,6 +302,6 @@ func (c *external) bootstrapTalosCluster(ctx context.Context, cr *v1alpha1.Boots
 		return errors.Wrap(err, "failed to bootstrap Talos cluster")
 	}
 
-	fmt.Printf("Successfully bootstrapped Talos cluster on node %s\n", cr.Spec.ForProvider.Node)
+	fmt.Printf("Successfully bootstrapped Talos cluster on endpoint %s\n", endpoint)
 	return nil
 }

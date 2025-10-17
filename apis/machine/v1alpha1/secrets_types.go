@@ -27,6 +27,9 @@ import (
 
 // SecretsParameters are the configurable fields of a Secrets.
 type SecretsParameters struct {
+	// Node is the Talos node endpoint for secrets validation (optional)
+	// +optional
+	Node *string `json:"node,omitempty"`
 	// TalosVersion is the Talos version for feature compatibility
 	// +optional
 	TalosVersion *string `json:"talosVersion,omitempty"`

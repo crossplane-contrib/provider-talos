@@ -1,5 +1,7 @@
 # Crossplane Provider Talos
 
+> **Note:** This provider is a work in progress. Contributions are welcome!
+
 `provider-talos` is a [Crossplane](https://crossplane.io/) infrastructure provider
 for [Talos Linux](https://www.talos.dev/). Built with [Upjet](https://github.com/upbound/upjet),
 it exposes XRM-conformant managed resources for the Talos API.

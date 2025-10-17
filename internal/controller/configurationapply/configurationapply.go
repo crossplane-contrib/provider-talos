@@ -20,10 +20,12 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"strings"
 
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/crossplane/crossplane-runtime/pkg/feature"
 
@@ -174,9 +176,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// Resource exists if we have applied the configuration
 	resourceExists := configApplied && appliedTimeExists
 
-	// Check if we have a valid machine configuration input (not placeholder)
-	hasValidConfig := cr.Spec.ForProvider.MachineConfigurationInput != "" &&
-		!strings.Contains(cr.Spec.ForProvider.MachineConfigurationInput, "# This should be populated")
+	// Check if we have a valid machine configuration from structured fields
+	hasValidConfig := cr.Spec.ForProvider.MachineConfiguration.Version != "" &&
+		cr.Spec.ForProvider.MachineConfiguration.Machine.Type != "" &&
+		cr.Spec.ForProvider.MachineConfiguration.Machine.Token != "" &&
+		cr.Spec.ForProvider.MachineConfiguration.Cluster.ID != ""
 
 	// Resource is up to date if it exists and has valid config
 	resourceUpToDate := resourceExists && hasValidConfig
@@ -253,40 +257,50 @@ func (c *external) Disconnect(ctx context.Context) error {
 
 // applyConfigurationToNode applies a Talos configuration to the specified node
 func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.ConfigurationApply) error {
-	// Get the machine configuration input
-	configInput := cr.Spec.ForProvider.MachineConfigurationInput
-	if configInput == "" || strings.Contains(configInput, "# This should be populated") {
-		return errors.New("machineConfigurationInput is empty or contains placeholder text")
+	// Generate machine configuration from structured fields
+	configInput, err := c.generateMachineConfigurationYAML(cr.Spec.ForProvider.MachineConfiguration)
+	if err != nil {
+		return errors.Wrap(err, "failed to generate machine configuration YAML")
 	}
+	
+	fmt.Printf("Generated configuration YAML (length: %d bytes)\n", len(configInput))
 
 	// For now, skip config parsing validation
 	// In a complete implementation, this would validate the configuration
 
-	// Create TLS credentials from the client configuration
+	// Create client config - support insecure mode for maintenance mode machines
 	clientConfig := cr.Spec.ForProvider.ClientConfiguration
-	if clientConfig.ClientCertificate == "" {
-		return errors.New("clientConfiguration is required")
-	}
-
-	// Create a certificate from the provided certificates
-	cert, err := tls.X509KeyPair([]byte(clientConfig.ClientCertificate), []byte(clientConfig.ClientKey))
-	if err != nil {
-		return errors.Wrap(err, "failed to create client certificate")
-	}
-
-	// Create TLS config
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name
-		MinVersion:   tls.VersionTLS12,
-	}
-
-	// Create Talos client
 	endpoints := []string{cr.Spec.ForProvider.Node + ":50000"} // Default Talos port
-	talosClient, err := talosclient.New(ctx,
-		talosclient.WithTLSConfig(tlsConfig),
-		talosclient.WithEndpoints(endpoints...),
-	)
+	
+	var talosClient *talosclient.Client
+	
+	if clientConfig.ClientCertificate == "" || clientConfig.ClientCertificate == "insecure" {
+		// Use insecure gRPC connection for machines in maintenance mode
+		fmt.Printf("Using insecure gRPC connection for maintenance mode machine\n")
+		talosClient, err = talosclient.New(ctx,
+			talosclient.WithConfig(nil), // Skip config loading for insecure mode
+			talosclient.WithGRPCDialOptions(grpc.WithTransportCredentials(insecure.NewCredentials())),
+			talosclient.WithEndpoints(endpoints...),
+		)
+	} else {
+		// Create a certificate from the provided certificates
+		cert, err := tls.X509KeyPair([]byte(clientConfig.ClientCertificate), []byte(clientConfig.ClientKey))
+		if err != nil {
+			return errors.Wrap(err, "failed to create client certificate")
+		}
+
+		// Create secure TLS config
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name
+			MinVersion:   tls.VersionTLS12,
+		}
+		fmt.Printf("Using secure TLS connection with client certificates\n")
+		talosClient, err = talosclient.New(ctx,
+			talosclient.WithGRPCDialOptions(grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))),
+			talosclient.WithEndpoints(endpoints...),
+		)
+	}
 	if err != nil {
 		return errors.Wrap(err, "failed to create Talos client")
 	}
@@ -303,4 +317,119 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 
 	fmt.Printf("Successfully applied configuration to node %s\n", cr.Spec.ForProvider.Node)
 	return nil
+}
+
+// generateMachineConfigurationYAML converts structured configuration to Talos machine configuration YAML
+func (c *external) generateMachineConfigurationYAML(config v1alpha1.MachineConfigurationSpec) (string, error) {
+	// Build the YAML configuration from structured fields
+	
+	// Set defaults
+	version := config.Version
+	if version == "" {
+		version = "v1alpha1"
+	}
+	
+	// Build machine section
+	machineType := config.Machine.Type
+	if machineType != "controlplane" && machineType != "worker" {
+		return "", errors.New("machine.type must be 'controlplane' or 'worker'")
+	}
+	
+	// Build cluster networking defaults
+	dnsDomain := "cluster.local"
+	if config.Cluster.Network.DNSDomain != nil {
+		dnsDomain = *config.Cluster.Network.DNSDomain
+	}
+	
+	podSubnets := []string{"10.244.0.0/16"}
+	if len(config.Cluster.Network.PodSubnets) > 0 {
+		podSubnets = config.Cluster.Network.PodSubnets
+	}
+	
+	serviceSubnets := []string{"10.96.0.0/12"}
+	if len(config.Cluster.Network.ServiceSubnets) > 0 {
+		serviceSubnets = config.Cluster.Network.ServiceSubnets
+	}
+	
+	// Build kubelet section
+	kubeletSection := ""
+	if config.Machine.Kubelet != nil && config.Machine.Kubelet.Image != nil {
+		kubeletSection = fmt.Sprintf(`  kubelet:
+    image: %s
+    defaultRuntimeSeccompProfileEnabled: true
+    disableManifestsDirectory: true`, *config.Machine.Kubelet.Image)
+	}
+
+	// Build features section
+	featuresSection := ""
+	if config.Machine.Features != nil && config.Machine.Features.RBAC != nil && *config.Machine.Features.RBAC {
+		featuresSection = `  features:
+    rbac: true
+    stableHostname: true
+    apidCheckExtKeyUsage: true
+    diskQuotaSupport: true`
+	}
+
+	// Build CA section
+	caSection := ""
+	if config.Machine.CA != nil && config.Machine.CA.Crt != "" && config.Machine.CA.Key != "" {
+		caSection = fmt.Sprintf(`  ca:
+    crt: %s
+    key: %s`, config.Machine.CA.Crt, config.Machine.CA.Key)
+	}
+
+	// Generate YAML configuration
+	yamlConfig := fmt.Sprintf(`# Talos machine configuration generated from structured fields
+version: %s
+debug: false
+persist: true
+machine:
+  type: %s
+  token: %s
+  install:
+    disk: %s
+    image: %s
+    wipe: %t
+%s
+%s
+%s
+  network: {}
+  sysctls: {}
+  sysfs: {}
+  registries: {}
+cluster:
+  id: %s
+  secret: %s
+  controlPlane:
+    endpoint: %s
+  clusterName: %s
+  network:
+    dnsDomain: %s
+    podSubnets:
+      - %s
+    serviceSubnets:
+      - %s
+  token: %s
+  secretboxEncryptionSecret: ""
+`,
+		version,
+		machineType,
+		config.Machine.Token,
+		config.Machine.Install.Disk,
+		config.Machine.Install.Image,
+		config.Machine.Install.Wipe != nil && *config.Machine.Install.Wipe,
+		kubeletSection,
+		featuresSection,
+		caSection,
+		config.Cluster.ID,
+		config.Cluster.Secret,
+		config.Cluster.ControlPlane.Endpoint,
+		config.Cluster.ClusterName,
+		dnsDomain,
+		podSubnets[0], // First pod subnet
+		serviceSubnets[0], // First service subnet
+		config.Cluster.Token,
+	)
+	
+	return yamlConfig, nil
 }

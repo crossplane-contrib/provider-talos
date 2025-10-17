@@ -109,10 +109,134 @@ spec:
                   endpoint:
                     description: Endpoint is the machine endpoint (optional)
                     type: string
-                  machineConfigurationInput:
-                    description: MachineConfigurationInput is the configuration to
-                      apply (required, sensitive)
-                    type: string
+                  machineConfiguration:
+                    description: MachineConfiguration defines the Talos machine configuration
+                      to apply
+                    properties:
+                      cluster:
+                        description: Cluster configuration
+                        properties:
+                          clusterName:
+                            description: ClusterName is the name of the cluster
+                            type: string
+                          controlPlane:
+                            description: ControlPlane defines control plane configuration
+                            properties:
+                              endpoint:
+                                description: Endpoint is the control plane endpoint
+                                  URL
+                                type: string
+                            required:
+                            - endpoint
+                            type: object
+                          id:
+                            description: ID is the cluster unique identifier
+                            type: string
+                          network:
+                            description: Network defines cluster networking
+                            properties:
+                              dnsDomain:
+                                description: DNSDomain is the cluster DNS domain
+                                type: string
+                              podSubnets:
+                                description: PodSubnets are the pod network CIDRs
+                                items:
+                                  type: string
+                                type: array
+                              serviceSubnets:
+                                description: ServiceSubnets are the service network
+                                  CIDRs
+                                items:
+                                  type: string
+                                type: array
+                            type: object
+                          secret:
+                            description: Secret is the cluster shared secret
+                            type: string
+                          token:
+                            description: Token for cluster bootstrap
+                            type: string
+                        required:
+                        - clusterName
+                        - controlPlane
+                        - id
+                        - network
+                        - secret
+                        - token
+                        type: object
+                      machine:
+                        description: Machine configuration
+                        properties:
+                          ca:
+                            description: CA defines the certificate authority configuration
+                              (optional)
+                            properties:
+                              crt:
+                                description: Crt is the PEM-encoded certificate
+                                type: string
+                              key:
+                                description: Key is the PEM-encoded private key
+                                type: string
+                            required:
+                            - crt
+                            - key
+                            type: object
+                          features:
+                            description: Features configuration (optional)
+                            properties:
+                              rbac:
+                                description: RBAC enables role-based access control
+                                type: boolean
+                            type: object
+                          install:
+                            description: Install configuration for the machine
+                            properties:
+                              disk:
+                                description: Disk is the target disk for installation
+                                type: string
+                              image:
+                                description: Image is the Talos installer image
+                                type: string
+                              wipe:
+                                description: Wipe indicates whether to wipe the disk
+                                type: boolean
+                            required:
+                            - disk
+                            - image
+                            type: object
+                          kubelet:
+                            description: Kubelet configuration (optional)
+                            properties:
+                              image:
+                                description: Image is the kubelet image
+                                type: string
+                            type: object
+                          network:
+                            description: Network configuration (optional)
+                            type: object
+                          token:
+                            description: Token for machine authentication
+                            type: string
+                          type:
+                            description: Type is the machine type (controlplane, worker)
+                            enum:
+                            - controlplane
+                            - worker
+                            type: string
+                        required:
+                        - install
+                        - token
+                        - type
+                        type: object
+                      version:
+                        description: Version is the Talos configuration version (e.g.,
+                          v1alpha1)
+                        type: string
+                    required:
+                    - cluster
+                    - machine
+                    - version
+                    type: object
                   node:
                     description: Node is the target machine identifier (required)
                     type: string
@@ -122,7 +246,7 @@ spec:
                     type: string
                 required:
                 - clientConfiguration
-                - machineConfigurationInput
+                - machineConfiguration
                 - node
                 type: object
               managementPolicies:
