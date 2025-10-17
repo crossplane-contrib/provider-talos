@@ -39,7 +39,6 @@ import (
 
 	"github.com/crossplane-contrib/provider-talos/apis/machine/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-talos/apis/v1alpha1"
-	"github.com/crossplane-contrib/provider-talos/internal/clients"
 	"github.com/crossplane-contrib/provider-talos/internal/features"
 
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
@@ -181,54 +180,6 @@ type TalosCredentials struct {
 	ClientKey         string `json:"client_key,omitempty"`
 }
 
-// parseCredentials parses the provider credentials into a ClientConfig
-func (c *external) parseCredentials() (*clients.ClientConfig, error) {
-	if len(c.service.credentials) == 0 {
-		// No credentials provided - use empty config with TLS verification skipped
-		return &clients.ClientConfig{
-			CACertificate:     "",
-			ClientCertificate: "",
-			ClientKey:         "",
-		}, nil
-	}
-	
-	// Try to parse credentials as JSON
-	var creds TalosCredentials
-	if err := json.Unmarshal(c.service.credentials, &creds); err != nil {
-		// If JSON parsing fails, treat as raw certificate content or fallback to empty config
-		fmt.Printf("Failed to parse credentials as JSON: %v. Using empty config.\n", err)
-		return &clients.ClientConfig{
-			CACertificate:     "",
-			ClientCertificate: "",
-			ClientKey:         "",
-		}, nil
-	}
-	
-	return &clients.ClientConfig{
-		CACertificate:     creds.CACertificate,
-		ClientCertificate: creds.ClientCertificate,
-		ClientKey:         creds.ClientKey,
-	}, nil
-}
-
-// createTalosClient creates a Talos client for the specified node endpoint using stored credentials
-func (c *external) createTalosClient(ctx context.Context, node string) (*clients.TalosClient, error) {
-	if node == "" {
-		return nil, errors.New("node endpoint cannot be empty")
-	}
-	
-	// Add default port if not specified
-	endpoint := node + ":50000"
-	
-	// Parse credentials from provider config
-	clientConfig, err := c.parseCredentials()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse credentials")
-	}
-	
-	return clients.NewTalosClient(ctx, endpoint, clientConfig)
-}
-
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mg.(*v1alpha1.Secrets)
 	if !ok {
@@ -242,45 +193,10 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	// Check if secrets already exist in status (locally generated)
 	statusExists := cr.Status.AtProvider.MachineSecrets != nil && cr.Status.AtProvider.ClientConfiguration != nil
-	
-	var resourceExists bool
-	var resourceUpToDate bool
-	
-	// If Node field is provided, validate against actual machine
-	if cr.Spec.ForProvider.Node != nil && *cr.Spec.ForProvider.Node != "" {
-		talosClient, err := c.createTalosClient(ctx, *cr.Spec.ForProvider.Node)
-		if err != nil {
-			// Connection failed - set synced=false
-			fmt.Printf("Failed to create Talos client: %v\n", err)
-			cr.SetConditions(xpv1.Unavailable().WithMessage(fmt.Sprintf("Cannot connect to Talos machine: %v", err)))
-			return managed.ExternalObservation{
-				ResourceExists:   false,
-				ResourceUpToDate: false,
-			}, nil
-		}
-		defer talosClient.Close() // nolint:errcheck
-		
-		secretsService := clients.NewSecretsService(talosClient)
-		
-		// Connect to Talos machine and check if secrets exist
-		resourceExists, err = secretsService.SecretsExist(ctx)
-		if err != nil {
-			// Connection failed - set synced=false
-			fmt.Printf("Failed to connect to Talos machine: %v\n", err)
-			cr.SetConditions(xpv1.Unavailable().WithMessage(fmt.Sprintf("Cannot connect to Talos machine: %v", err)))
-			return managed.ExternalObservation{
-				ResourceExists:   false,
-				ResourceUpToDate: false,
-			}, nil
-		}
-		
-		// For secrets, if they exist on machine and in status, they're up to date
-		resourceUpToDate = resourceExists && statusExists
-	} else {
-		// No node specified - secrets are local only (common for initial cluster setup)
-		resourceExists = statusExists
-		resourceUpToDate = statusExists
-	}
+
+	// Secrets are local resources - they're always generated locally
+	resourceExists := statusExists
+	resourceUpToDate := statusExists
 
 	connectionDetails := managed.ConnectionDetails{}
 	if resourceExists && cr.Status.AtProvider.ClientConfiguration != nil {

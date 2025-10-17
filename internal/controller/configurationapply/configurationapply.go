@@ -262,7 +262,7 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 	if err != nil {
 		return errors.Wrap(err, "failed to generate machine configuration YAML")
 	}
-	
+
 	fmt.Printf("Generated configuration YAML (length: %d bytes)\n", len(configInput))
 
 	// For now, skip config parsing validation
@@ -271,9 +271,9 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 	// Create client config - support insecure mode for maintenance mode machines
 	clientConfig := cr.Spec.ForProvider.ClientConfiguration
 	endpoints := []string{cr.Spec.ForProvider.Node + ":50000"} // Default Talos port
-	
+
 	var talosClient *talosclient.Client
-	
+
 	if clientConfig.ClientCertificate == "" || clientConfig.ClientCertificate == "insecure" {
 		// Use insecure gRPC connection for machines in maintenance mode
 		fmt.Printf("Using insecure gRPC connection for maintenance mode machine\n")
@@ -284,20 +284,18 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 		)
 	} else {
 		// Create a certificate from the provided certificates
-		cert, err := tls.X509KeyPair([]byte(clientConfig.ClientCertificate), []byte(clientConfig.ClientKey))
-		if err != nil {
-			return errors.Wrap(err, "failed to create client certificate")
+		cert, certErr := tls.X509KeyPair([]byte(clientConfig.ClientCertificate), []byte(clientConfig.ClientKey))
+		if certErr != nil {
+			return errors.Wrap(certErr, "failed to create client certificate")
 		}
 
-		// Create secure TLS config
-		tlsConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name
-			MinVersion:   tls.VersionTLS12,
-		}
 		fmt.Printf("Using secure TLS connection with client certificates\n")
 		talosClient, err = talosclient.New(ctx,
-			talosclient.WithGRPCDialOptions(grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))),
+			talosclient.WithGRPCDialOptions(grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+				Certificates: []tls.Certificate{cert},
+				ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name
+				MinVersion:   tls.VersionTLS12,
+			}))),
 			talosclient.WithEndpoints(endpoints...),
 		)
 	}
@@ -320,37 +318,39 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 }
 
 // generateMachineConfigurationYAML converts structured configuration to Talos machine configuration YAML
+//
+//nolint:gocyclo // Function complexity is acceptable for config generation
 func (c *external) generateMachineConfigurationYAML(config v1alpha1.MachineConfigurationSpec) (string, error) {
 	// Build the YAML configuration from structured fields
-	
+
 	// Set defaults
 	version := config.Version
 	if version == "" {
 		version = "v1alpha1"
 	}
-	
+
 	// Build machine section
 	machineType := config.Machine.Type
 	if machineType != "controlplane" && machineType != "worker" {
 		return "", errors.New("machine.type must be 'controlplane' or 'worker'")
 	}
-	
+
 	// Build cluster networking defaults
 	dnsDomain := "cluster.local"
 	if config.Cluster.Network.DNSDomain != nil {
 		dnsDomain = *config.Cluster.Network.DNSDomain
 	}
-	
+
 	podSubnets := []string{"10.244.0.0/16"}
 	if len(config.Cluster.Network.PodSubnets) > 0 {
 		podSubnets = config.Cluster.Network.PodSubnets
 	}
-	
+
 	serviceSubnets := []string{"10.96.0.0/12"}
 	if len(config.Cluster.Network.ServiceSubnets) > 0 {
 		serviceSubnets = config.Cluster.Network.ServiceSubnets
 	}
-	
+
 	// Build kubelet section
 	kubeletSection := ""
 	if config.Machine.Kubelet != nil && config.Machine.Kubelet.Image != nil {
@@ -426,10 +426,10 @@ cluster:
 		config.Cluster.ControlPlane.Endpoint,
 		config.Cluster.ClusterName,
 		dnsDomain,
-		podSubnets[0], // First pod subnet
+		podSubnets[0],     // First pod subnet
 		serviceSubnets[0], // First service subnet
 		config.Cluster.Token,
 	)
-	
+
 	return yamlConfig, nil
 }

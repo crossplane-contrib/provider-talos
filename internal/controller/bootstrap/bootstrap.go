@@ -264,7 +264,7 @@ func (c *external) bootstrapTalosCluster(ctx context.Context, cr *v1alpha1.Boots
 		talosClient, err = talosclient.New(ctx,
 			talosclient.WithEndpoints(endpoint),
 			talosclient.WithTLSConfig(&tls.Config{
-				InsecureSkipVerify: true,
+				InsecureSkipVerify: true, //nolint:gosec // Insecure mode needed for maintenance mode machines
 			}),
 		)
 	} else {

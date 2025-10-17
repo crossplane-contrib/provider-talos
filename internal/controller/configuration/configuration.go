@@ -18,7 +18,6 @@ package configuration
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/crossplane/crossplane-runtime/pkg/feature"
@@ -40,9 +39,7 @@ import (
 
 	machinev1alpha1 "github.com/crossplane-contrib/provider-talos/apis/machine/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-talos/apis/v1alpha1"
-	"github.com/crossplane-contrib/provider-talos/internal/clients"
 	"github.com/crossplane-contrib/provider-talos/internal/features"
-
 )
 
 const (
@@ -167,61 +164,6 @@ type external struct {
 	service *TalosConfigurationService
 }
 
-// TalosCredentials represents the expected structure of Talos provider credentials
-type TalosCredentials struct {
-	CACertificate     string `json:"ca_certificate,omitempty"`
-	ClientCertificate string `json:"client_certificate,omitempty"`
-	ClientKey         string `json:"client_key,omitempty"`
-}
-
-// parseCredentials parses the provider credentials into a ClientConfig
-func (c *external) parseCredentials() (*clients.ClientConfig, error) {
-	if len(c.service.credentials) == 0 {
-		// No credentials provided - use empty config with TLS verification skipped
-		return &clients.ClientConfig{
-			CACertificate:     "",
-			ClientCertificate: "",
-			ClientKey:         "",
-		}, nil
-	}
-	
-	// Try to parse credentials as JSON
-	var creds TalosCredentials
-	if err := json.Unmarshal(c.service.credentials, &creds); err != nil {
-		// If JSON parsing fails, treat as raw certificate content or fallback to empty config
-		fmt.Printf("Failed to parse credentials as JSON: %v. Using empty config.\n", err)
-		return &clients.ClientConfig{
-			CACertificate:     "",
-			ClientCertificate: "",
-			ClientKey:         "",
-		}, nil
-	}
-	
-	return &clients.ClientConfig{
-		CACertificate:     creds.CACertificate,
-		ClientCertificate: creds.ClientCertificate,
-		ClientKey:         creds.ClientKey,
-	}, nil
-}
-
-// createTalosClient creates a Talos client for the specified node endpoint using stored credentials
-func (c *external) createTalosClient(ctx context.Context, node string) (*clients.TalosClient, error) {
-	if node == "" {
-		return nil, errors.New("node endpoint cannot be empty")
-	}
-	
-	// Add default port if not specified
-	endpoint := node + ":50000"
-	
-	// Parse credentials from provider config
-	clientConfig, err := c.parseCredentials()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse credentials")
-	}
-	
-	return clients.NewTalosClient(ctx, endpoint, clientConfig)
-}
-
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mg.(*machinev1alpha1.Configuration)
 	if !ok {
@@ -230,76 +172,24 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	fmt.Printf("Observing Configuration: %s\n", cr.Name)
 
-	// Create Talos client using Node field from resource spec
-	if cr.Spec.ForProvider.Node == "" {
-		return managed.ExternalObservation{}, errors.New("node field is required for Talos connection")
-	}
-	
-	talosClient, err := c.createTalosClient(ctx, cr.Spec.ForProvider.Node)
+	// Configuration is a local resource - it generates config locally
+	// Always consider it as existing since we can generate it anytime
+	machineConfig, err := c.generateMachineConfiguration(ctx, cr)
 	if err != nil {
-		// Connection failed - set synced=false
-		fmt.Printf("Failed to create Talos client: %v\n", err)
-		cr.SetConditions(xpv1.Unavailable().WithMessage(fmt.Sprintf("Cannot connect to Talos machine: %v", err)))
-		return managed.ExternalObservation{
-			ResourceExists:   false,
-			ResourceUpToDate: false,
-		}, nil
-	}
-	defer talosClient.Close() // nolint:errcheck
-	
-	configService := clients.NewConfigurationService(talosClient)
-	
-	// Connect to Talos machine and check if configuration exists
-	resourceExists, err := configService.ConfigurationExists(ctx)
-	if err != nil {
-		// Connection failed - set synced=false
-		fmt.Printf("Failed to connect to Talos machine: %v\n", err)
-		cr.SetConditions(xpv1.Unavailable().WithMessage(fmt.Sprintf("Cannot connect to Talos machine: %v", err)))
-		return managed.ExternalObservation{
-			ResourceExists:   false,
-			ResourceUpToDate: false,
-		}, nil
+		return managed.ExternalObservation{}, errors.Wrap(err, "failed to generate machine configuration")
 	}
 
-	// If configuration exists on machine, retrieve it and compare with desired state
-	var resourceUpToDate bool
-	if resourceExists {
-		currentConfig, err := configService.GetConfiguration(ctx)
-		if err != nil {
-			fmt.Printf("Failed to get current configuration: %v\n", err)
-			cr.SetConditions(xpv1.Unavailable().WithMessage(fmt.Sprintf("Cannot retrieve configuration: %v", err)))
-			return managed.ExternalObservation{
-				ResourceExists:   true,
-				ResourceUpToDate: false,
-			}, nil
-		}
-		
-		// Compare current config with desired config
-		desiredConfig, err := c.generateMachineConfiguration(ctx, cr)
-		if err != nil {
-			return managed.ExternalObservation{}, errors.Wrap(err, "failed to generate desired configuration")
-		}
-		
-		resourceUpToDate = currentConfig == desiredConfig
-		
-		// Update status with current configuration
-		cr.Status.AtProvider.MachineConfiguration = currentConfig
-	} else {
-		resourceUpToDate = false
-	}
+	// Update status with generated configuration
+	cr.Status.AtProvider.MachineConfiguration = machineConfig
 
-	fmt.Printf("Configuration exists: %v, up to date: %v\n", resourceExists, resourceUpToDate)
+	// Set Ready condition
+	cr.SetConditions(xpv1.Available())
 
-	// Set conditions based on actual state
-	if resourceExists && resourceUpToDate {
-		cr.SetConditions(xpv1.Available())
-	} else {
-		cr.SetConditions(xpv1.Unavailable())
-	}
+	fmt.Printf("Configuration generated successfully (length: %d)\n", len(machineConfig))
 
 	return managed.ExternalObservation{
-		ResourceExists:    resourceExists,
-		ResourceUpToDate:  resourceUpToDate,
+		ResourceExists:    true,
+		ResourceUpToDate:  true,
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
@@ -310,38 +200,9 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalCreation{}, errors.New(errNotConfiguration)
 	}
 
-	fmt.Printf("Creating Configuration: %s\n", cr.Name)
+	fmt.Printf("Creating Configuration: %s (no-op for local resource)\n", cr.Name)
 
-	// Create Talos client using Node field from resource spec
-	if cr.Spec.ForProvider.Node == "" {
-		return managed.ExternalCreation{}, errors.New("node field is required for Talos connection")
-	}
-	
-	talosClient, err := c.createTalosClient(ctx, cr.Spec.ForProvider.Node)
-	if err != nil {
-		return managed.ExternalCreation{}, errors.Wrap(err, "failed to create Talos client")
-	}
-	defer talosClient.Close() // nolint:errcheck
-	
-	configService := clients.NewConfigurationService(talosClient)
-
-	// Generate the desired configuration
-	machineConfig, err := c.generateMachineConfiguration(ctx, cr)
-	if err != nil {
-		return managed.ExternalCreation{}, errors.Wrap(err, "failed to generate machine configuration")
-	}
-
-	// Apply configuration to the Talos machine
-	err = configService.ApplyConfiguration(ctx, machineConfig)
-	if err != nil {
-		return managed.ExternalCreation{}, errors.Wrap(err, "failed to apply configuration to Talos machine")
-	}
-
-	fmt.Printf("Successfully applied configuration to Talos machine (length: %d)\n", len(machineConfig))
-
-	// Update status with the applied configuration
-	cr.Status.AtProvider.MachineConfiguration = machineConfig
-
+	// Configuration is generated in Observe - Create is a no-op
 	return managed.ExternalCreation{
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
@@ -353,38 +214,9 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalUpdate{}, errors.New(errNotConfiguration)
 	}
 
-	fmt.Printf("Updating Configuration: %s\n", cr.Name)
+	fmt.Printf("Updating Configuration: %s (no-op for local resource)\n", cr.Name)
 
-	// Create Talos client using Node field from resource spec
-	if cr.Spec.ForProvider.Node == "" {
-		return managed.ExternalUpdate{}, errors.New("node field is required for Talos connection")
-	}
-	
-	talosClient, err := c.createTalosClient(ctx, cr.Spec.ForProvider.Node)
-	if err != nil {
-		return managed.ExternalUpdate{}, errors.Wrap(err, "failed to create Talos client")
-	}
-	defer talosClient.Close() // nolint:errcheck
-	
-	configService := clients.NewConfigurationService(talosClient)
-
-	// Generate the new desired configuration
-	machineConfig, err := c.generateMachineConfiguration(ctx, cr)
-	if err != nil {
-		return managed.ExternalUpdate{}, errors.Wrap(err, "failed to generate machine configuration")
-	}
-
-	// Apply updated configuration to the Talos machine
-	err = configService.ApplyConfiguration(ctx, machineConfig)
-	if err != nil {
-		return managed.ExternalUpdate{}, errors.Wrap(err, "failed to update configuration on Talos machine")
-	}
-
-	fmt.Printf("Successfully updated configuration on Talos machine\n")
-
-	// Update status with the new configuration
-	cr.Status.AtProvider.MachineConfiguration = machineConfig
-
+	// Configuration is regenerated in Observe - Update is a no-op
 	return managed.ExternalUpdate{
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
