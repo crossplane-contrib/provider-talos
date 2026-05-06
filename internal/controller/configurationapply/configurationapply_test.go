@@ -226,6 +226,112 @@ func TestBuildConfigurationApplyTLSConfig(t *testing.T) {
 	}
 }
 
+func TestBuildApplyTLSConfig(t *testing.T) {
+	caCert, clientCert, clientKey := generateTestCertificates(t)
+
+	tests := map[string]struct {
+		maintenanceMode bool
+		clientConfig    v1alpha1.ClientConfiguration
+		check           func(t *testing.T, cfg *tls.Config, maintenanceMode bool)
+		wantErr         bool
+	}{
+		"MaintenanceModeUsesInsecureTLSWithInlineClientConfiguration": {
+			maintenanceMode: true,
+			clientConfig: v1alpha1.ClientConfiguration{
+				CACertificate:     caCert,
+				ClientCertificate: clientCert,
+				ClientKey:         clientKey,
+			},
+			check: func(t *testing.T, cfg *tls.Config, maintenanceMode bool) {
+				t.Helper()
+				if !maintenanceMode {
+					t.Fatal("buildApplyTLSConfig(...): maintenanceMode = false")
+				}
+				if !cfg.InsecureSkipVerify {
+					t.Fatal("buildApplyTLSConfig(...): InsecureSkipVerify = false")
+				}
+				if len(cfg.Certificates) != 0 {
+					t.Fatalf("buildApplyTLSConfig(...): got %d certificates, want 0", len(cfg.Certificates))
+				}
+			},
+		},
+		"SecureFallbackUsesInlineClientConfiguration": {
+			clientConfig: v1alpha1.ClientConfiguration{
+				CACertificate:     caCert,
+				ClientCertificate: clientCert,
+				ClientKey:         clientKey,
+			},
+			check: func(t *testing.T, cfg *tls.Config, maintenanceMode bool) {
+				t.Helper()
+				if maintenanceMode {
+					t.Fatal("buildApplyTLSConfig(...): maintenanceMode = true")
+				}
+				if cfg.InsecureSkipVerify {
+					t.Fatal("buildApplyTLSConfig(...): InsecureSkipVerify = true")
+				}
+				if len(cfg.Certificates) != 1 {
+					t.Fatalf("buildApplyTLSConfig(...): got %d certificates, want 1", len(cfg.Certificates))
+				}
+				if cfg.RootCAs == nil {
+					t.Fatal("buildApplyTLSConfig(...): RootCAs = nil")
+				}
+				if diff := cmp.Diff("127.0.0.1", cfg.ServerName); diff != "" {
+					t.Errorf("buildApplyTLSConfig(...).ServerName: -want, +got:\n%s", diff)
+				}
+			},
+		},
+		"ExplicitInsecureFallbackPreservesExistingBehavior": {
+			clientConfig: v1alpha1.ClientConfiguration{ClientCertificate: "insecure"},
+			check: func(t *testing.T, cfg *tls.Config, maintenanceMode bool) {
+				t.Helper()
+				if maintenanceMode {
+					t.Fatal("buildApplyTLSConfig(...): maintenanceMode = true")
+				}
+				if !cfg.InsecureSkipVerify {
+					t.Fatal("buildApplyTLSConfig(...): InsecureSkipVerify = false")
+				}
+			},
+		},
+		"InvalidSecureClientConfigurationErrorsAfterMaintenanceProbeFails": {
+			clientConfig: v1alpha1.ClientConfiguration{
+				CACertificate:     "invalid",
+				ClientCertificate: clientCert,
+				ClientKey:         clientKey,
+			},
+			wantErr: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			e := external{
+				canConnectInsecureFn: func(context.Context, *v1alpha1.ConfigurationApply) bool {
+					return tc.maintenanceMode
+				},
+			}
+			cr := &v1alpha1.ConfigurationApply{
+				Spec: v1alpha1.ConfigurationApplySpec{
+					ForProvider: v1alpha1.ConfigurationApplyParameters{
+						Node:                "127.0.0.1",
+						ClientConfiguration: tc.clientConfig,
+					},
+				},
+			}
+
+			got, maintenanceMode, err := e.buildApplyTLSConfig(context.Background(), cr)
+			if tc.wantErr && err == nil {
+				t.Fatal("buildApplyTLSConfig(...): expected error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("buildApplyTLSConfig(...): unexpected error: %v", err)
+			}
+			if tc.check != nil {
+				tc.check(t, got, maintenanceMode)
+			}
+		})
+	}
+}
+
 func TestGetConfigurationApplyEndpoint(t *testing.T) {
 	node := "127.0.0.2"
 	customEndpoint := "127.0.0.1:50000"

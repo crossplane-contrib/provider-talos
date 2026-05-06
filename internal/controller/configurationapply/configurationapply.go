@@ -167,6 +167,8 @@ type external struct {
 	service interface{}
 	// ProviderConfig credentials for verifying machine state
 	providerConfigData []byte
+	// canConnectInsecureFn allows tests to stub maintenance-mode detection.
+	canConnectInsecureFn func(context.Context, *v1alpha1.ConfigurationApply) bool
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
@@ -339,6 +341,10 @@ func (c *external) checkMachineState(ctx context.Context, cr *v1alpha1.Configura
 
 // canConnectInsecure checks if the machine accepts insecure connections (maintenance mode)
 func (c *external) canConnectInsecure(ctx context.Context, cr *v1alpha1.ConfigurationApply) bool {
+	if c.canConnectInsecureFn != nil {
+		return c.canConnectInsecureFn(ctx, cr)
+	}
+
 	endpoint := getConfigurationApplyEndpoint(cr)
 
 	talosClient, err := talosclient.New(ctx,
@@ -417,15 +423,15 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 	// For now, skip config parsing validation
 	// In a complete implementation, this would validate the configuration
 
-	// Create client config - support insecure mode for maintenance mode machines
-	clientConfig := cr.Spec.ForProvider.ClientConfiguration
 	endpoint := getConfigurationApplyEndpoint(cr)
 
-	tlsConfig, err := buildConfigurationApplyTLSConfig(clientConfig, cr.Spec.ForProvider.Node)
+	tlsConfig, maintenanceMode, err := c.buildApplyTLSConfig(ctx, cr)
 	if err != nil {
 		return err
 	}
-	if tlsConfig.InsecureSkipVerify {
+	if maintenanceMode {
+		fmt.Printf("Machine %s is in maintenance mode; using insecure first apply\n", cr.Spec.ForProvider.Node)
+	} else if tlsConfig.InsecureSkipVerify {
 		fmt.Printf("Using insecure gRPC connection for maintenance mode machine\n")
 	} else {
 		fmt.Printf("Using secure TLS connection with client certificates\n")
@@ -455,6 +461,20 @@ func (c *external) applyConfigurationToNode(ctx context.Context, cr *v1alpha1.Co
 
 	fmt.Printf("Successfully applied configuration to node %s\n", cr.Spec.ForProvider.Node)
 	return nil
+}
+
+func (c *external) buildApplyTLSConfig(ctx context.Context, cr *v1alpha1.ConfigurationApply) (*tls.Config, bool, error) {
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	if c.canConnectInsecure(checkCtx, cr) {
+		return &tls.Config{
+			InsecureSkipVerify: true, //nolint:gosec // Insecure mode needed for Talos maintenance-mode first apply.
+		}, true, nil
+	}
+
+	tlsConfig, err := buildConfigurationApplyTLSConfig(cr.Spec.ForProvider.ClientConfiguration, cr.Spec.ForProvider.Node)
+	return tlsConfig, false, err
 }
 
 func buildConfigurationApplyTLSConfig(clientConfig v1alpha1.ClientConfiguration, node string) (*tls.Config, error) {
