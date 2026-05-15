@@ -19,9 +19,12 @@ package kubeconfig
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 
+	siderox509 "github.com/siderolabs/crypto/x509"
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
+	clientconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/feature"
@@ -302,28 +305,17 @@ func (c *external) retrieveKubeconfig(ctx context.Context, cr *v1alpha1.Kubeconf
 func retrieveKubeconfigFromTalos(ctx context.Context, cr *v1alpha1.Kubeconfig) (string, error) {
 	// Get client configuration
 	clientConfig := cr.Spec.ForProvider.ClientConfiguration
-	if clientConfig.ClientCertificate == "" {
-		return "", errors.New("clientConfiguration is required")
-	}
-
-	// Create a certificate from the provided certificates
-	cert, err := tls.X509KeyPair([]byte(clientConfig.ClientCertificate), []byte(clientConfig.ClientKey))
+	talosConfig, err := buildKubeconfigClientConfig(clientConfig)
 	if err != nil {
-		return "", errors.Wrap(err, "failed to create client certificate")
+		return "", err
 	}
 
-	// Create TLS config
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ServerName:   cr.Spec.ForProvider.Node, // Use node IP as server name
-		MinVersion:   tls.VersionTLS12,
-	}
+	endpoint := getKubeconfigEndpoint(cr)
 
 	// Create Talos client
-	endpoints := []string{cr.Spec.ForProvider.Node + ":50000"} // Default Talos port
 	talosClient, err := talosclient.New(ctx,
-		talosclient.WithTLSConfig(tlsConfig),
-		talosclient.WithEndpoints(endpoints...),
+		talosclient.WithConfig(talosConfig),
+		talosclient.WithEndpoints(endpoint),
 	)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to create Talos client")
@@ -331,7 +323,7 @@ func retrieveKubeconfigFromTalos(ctx context.Context, cr *v1alpha1.Kubeconfig) (
 	defer talosClient.Close() // nolint:errcheck
 
 	// Retrieve the kubeconfig
-	kubeconfigBytes, err := talosClient.Kubeconfig(ctx)
+	kubeconfigBytes, err := talosClient.Kubeconfig(talosclient.WithNode(ctx, cr.Spec.ForProvider.Node))
 	if err != nil {
 		return "", errors.Wrap(err, "failed to retrieve kubeconfig from Talos node")
 	}
@@ -343,6 +335,45 @@ func retrieveKubeconfigFromTalos(ctx context.Context, cr *v1alpha1.Kubeconfig) (
 	fmt.Printf("Successfully retrieved kubeconfig from node %s\n", cr.Spec.ForProvider.Node)
 
 	return string(kubeconfigBytes), nil
+}
+
+func getKubeconfigEndpoint(cr *v1alpha1.Kubeconfig) string {
+	endpoint := cr.Spec.ForProvider.Node + ":50000"
+	if cr.Spec.ForProvider.Endpoint != nil && *cr.Spec.ForProvider.Endpoint != "" {
+		endpoint = *cr.Spec.ForProvider.Endpoint
+	}
+
+	return endpoint
+}
+
+func buildKubeconfigClientConfig(clientConfig v1alpha1.ClientConfiguration) (*clientconfig.Config, error) {
+	if clientConfig.ClientCertificate == "" {
+		return nil, errors.New("clientConfiguration.clientCertificate is required")
+	}
+	if clientConfig.ClientKey == "" {
+		return nil, errors.New("clientConfiguration.clientKey is required")
+	}
+	if clientConfig.CACertificate == "" {
+		return nil, errors.New("clientConfiguration.caCertificate is required")
+	}
+
+	cert, err := tls.X509KeyPair([]byte(clientConfig.ClientCertificate), []byte(clientConfig.ClientKey))
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create client certificate")
+	}
+	if len(cert.Certificate) == 0 {
+		return nil, errors.New("failed to create client certificate")
+	}
+
+	roots := x509.NewCertPool()
+	if ok := roots.AppendCertsFromPEM([]byte(clientConfig.CACertificate)); !ok {
+		return nil, errors.New("failed to parse CA certificate")
+	}
+
+	return clientconfig.NewConfig("dynamic", nil, []byte(clientConfig.CACertificate), &siderox509.PEMEncodedCertificateAndKey{
+		Crt: []byte(clientConfig.ClientCertificate),
+		Key: []byte(clientConfig.ClientKey),
+	}), nil
 }
 
 func parseKubeconfig(kubeconfigData string) (*v1alpha1.KubernetesClientConfiguration, error) {

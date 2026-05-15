@@ -18,8 +18,16 @@ package kubeconfig
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/pem"
+	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
@@ -219,6 +227,134 @@ func TestUpdate(t *testing.T) {
 	}
 }
 
+func TestGetKubeconfigEndpoint(t *testing.T) {
+	emptyEndpoint := ""
+	customEndpoint := "10.0.0.5:50000"
+
+	tests := map[string]struct {
+		cr   *v1alpha1.Kubeconfig
+		want string
+	}{
+		"Default": {
+			cr: &v1alpha1.Kubeconfig{Spec: v1alpha1.KubeconfigSpec{ForProvider: v1alpha1.KubeconfigParameters{
+				Node: "10.0.0.1",
+			}}},
+			want: "10.0.0.1:50000",
+		},
+		"EmptyEndpoint": {
+			cr: &v1alpha1.Kubeconfig{Spec: v1alpha1.KubeconfigSpec{ForProvider: v1alpha1.KubeconfigParameters{
+				Node:     "10.0.0.2",
+				Endpoint: &emptyEndpoint,
+			}}},
+			want: "10.0.0.2:50000",
+		},
+		"CustomEndpoint": {
+			cr: &v1alpha1.Kubeconfig{Spec: v1alpha1.KubeconfigSpec{ForProvider: v1alpha1.KubeconfigParameters{
+				Node:     "10.0.0.3",
+				Endpoint: &customEndpoint,
+			}}},
+			want: customEndpoint,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := getKubeconfigEndpoint(tc.cr)
+			if got != tc.want {
+				t.Fatalf("getKubeconfigEndpoint(...): got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildKubeconfigClientConfig(t *testing.T) {
+	caCert, clientCert, clientKey := generateTestCertificates(t)
+
+	tests := map[string]struct {
+		clientConfig v1alpha1.ClientConfiguration
+		wantErr      string
+	}{
+		"SecureWithPEMValues": {
+			clientConfig: v1alpha1.ClientConfiguration{
+				CACertificate:     caCert,
+				ClientCertificate: clientCert,
+				ClientKey:         clientKey,
+			},
+		},
+		"InvalidCAErrors": {
+			clientConfig: v1alpha1.ClientConfiguration{
+				CACertificate:     "invalid",
+				ClientCertificate: clientCert,
+				ClientKey:         clientKey,
+			},
+			wantErr: "failed to parse CA certificate",
+		},
+		"InvalidClientCertificateErrors": {
+			clientConfig: v1alpha1.ClientConfiguration{
+				CACertificate:     caCert,
+				ClientCertificate: "invalid",
+				ClientKey:         clientKey,
+			},
+			wantErr: "failed to create client certificate",
+		},
+		"MissingCACertificateErrors": {
+			clientConfig: v1alpha1.ClientConfiguration{
+				ClientCertificate: clientCert,
+				ClientKey:         clientKey,
+			},
+			wantErr: "clientConfiguration.caCertificate is required",
+		},
+		"MissingClientCertificateErrors": {
+			clientConfig: v1alpha1.ClientConfiguration{
+				CACertificate: caCert,
+				ClientKey:     clientKey,
+			},
+			wantErr: "clientConfiguration.clientCertificate is required",
+		},
+		"MissingClientKeyErrors": {
+			clientConfig: v1alpha1.ClientConfiguration{
+				CACertificate:     caCert,
+				ClientCertificate: clientCert,
+			},
+			wantErr: "clientConfiguration.clientKey is required",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := buildKubeconfigClientConfig(tc.clientConfig)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatal("buildKubeconfigClientConfig(...): expected error")
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("buildKubeconfigClientConfig(...): got error %q, want to contain %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildKubeconfigClientConfig(...): unexpected error: %v", err)
+			}
+			if diff := cmp.Diff("dynamic", got.Context); diff != "" {
+				t.Errorf("buildKubeconfigClientConfig(...).Context: -want, +got:\n%s", diff)
+			}
+			if len(got.Contexts) != 1 {
+				t.Fatalf("buildKubeconfigClientConfig(...): got %d contexts, want 1", len(got.Contexts))
+			}
+			ctx := got.Contexts["dynamic"]
+			if ctx == nil {
+				t.Fatal("buildKubeconfigClientConfig(...).Contexts[dynamic] = nil")
+			}
+			assertBase64Value(t, "CA", ctx.CA, tc.clientConfig.CACertificate)
+			assertBase64Value(t, "Crt", ctx.Crt, tc.clientConfig.ClientCertificate)
+			assertBase64Value(t, "Key", ctx.Key, tc.clientConfig.ClientKey)
+			if len(ctx.Endpoints) != 0 {
+				t.Fatalf("buildKubeconfigClientConfig(...).Contexts[dynamic].Endpoints = %v, want empty", ctx.Endpoints)
+			}
+		})
+	}
+}
+
 func TestParseKubeconfig(t *testing.T) {
 	type want struct {
 		configuration *v1alpha1.KubernetesClientConfiguration
@@ -333,6 +469,65 @@ func testKubeClient(t *testing.T, objects ...runtime.Object) ctrlclient.Client {
 
 	return fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objects...).Build()
 }
+
+func assertBase64Value(t *testing.T, field, got, wantDecoded string) {
+	t.Helper()
+
+	decoded, err := base64.StdEncoding.DecodeString(got)
+	if err != nil {
+		t.Fatalf("%s is not base64 encoded: %v", field, err)
+	}
+	if diff := cmp.Diff(wantDecoded, string(decoded)); diff != "" {
+		t.Fatalf("%s decoded value: -want, +got:\n%s", field, diff)
+	}
+}
+
+func generateTestCertificates(t *testing.T) (string, string, string) {
+	t.Helper()
+
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey(...): %v", err)
+	}
+
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("x509.CreateCertificate(...): %v", err)
+	}
+
+	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey(...): %v", err)
+	}
+	clientTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "test-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caTemplate, &clientKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("x509.CreateCertificate(...): %v", err)
+	}
+
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	clientCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER})
+	clientKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(clientKey)})
+
+	return string(caPEM), string(clientCertPEM), string(clientKeyPEM)
+}
+
 func testClientConfiguration() *v1alpha1.KubernetesClientConfiguration {
 	return &v1alpha1.KubernetesClientConfiguration{
 		Host:              "https://127.0.0.1:6443",
