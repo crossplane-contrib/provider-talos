@@ -11,3 +11,4 @@ guidelines and responsibilities for the steering committee and maintainers.
 ## Maintainers
 
 * Jay Miracola <jay.miracola@upbound.io> ([jaymiracola](https://github.com/jaymiracola))
+* Daniel Dides <ddides@bridgephase.com> ([danieldides](https://github.com/danieldides))
