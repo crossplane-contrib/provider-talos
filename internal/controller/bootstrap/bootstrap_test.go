@@ -33,6 +33,9 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
+	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
+	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
@@ -104,17 +107,40 @@ func TestObserveWithSuccessfulExternalCreate(t *testing.T) {
 	if !got.ResourceExists {
 		t.Fatal("e.Observe(...).ResourceExists = false, want true")
 	}
-	if !got.ResourceUpToDate {
-		t.Fatal("e.Observe(...).ResourceUpToDate = false, want true")
+	if got.ResourceUpToDate {
+		t.Fatal("e.Observe(...).ResourceUpToDate = true, want false")
 	}
-	if !cr.Status.AtProvider.Bootstrapped {
-		t.Fatal("cr.Status.AtProvider.Bootstrapped = false, want true")
+	if cr.Status.AtProvider.Bootstrapped {
+		t.Fatal("cr.Status.AtProvider.Bootstrapped = true, want false")
 	}
-	if cr.Status.AtProvider.BootstrapTime == nil || !cr.Status.AtProvider.BootstrapTime.Time.Equal(createdAt) {
-		t.Fatalf("cr.Status.AtProvider.BootstrapTime = %v, want %v", cr.Status.AtProvider.BootstrapTime, createdAt)
+	if cr.Status.AtProvider.BootstrapTime != nil {
+		t.Fatalf("cr.Status.AtProvider.BootstrapTime = %v, want nil", cr.Status.AtProvider.BootstrapTime)
 	}
-	if got := cr.Status.GetCondition(xpv1.TypeReady).Status; got != corev1.ConditionTrue {
-		t.Fatalf("Ready condition status = %s, want %s", got, corev1.ConditionTrue)
+	if got := cr.Status.GetCondition(xpv1.TypeReady).Status; got == corev1.ConditionTrue {
+		t.Fatalf("Ready condition status = %s, want not true", got)
+	}
+}
+
+func TestObserveWithCachedBootstrappedStatusUnhealthy(t *testing.T) {
+	cr := testBootstrap()
+	cr.Status.AtProvider.Bootstrapped = true
+	now := metav1.Now()
+	cr.Status.AtProvider.BootstrapTime = &now
+
+	e := external{isBootstrappedHealthyFn: func(context.Context, *v1alpha1.Bootstrap) bool { return false }}
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("e.Observe(...): unexpected error: %v", err)
+	}
+
+	if !got.ResourceExists {
+		t.Fatal("e.Observe(...).ResourceExists = false, want true")
+	}
+	if got.ResourceUpToDate {
+		t.Fatal("e.Observe(...).ResourceUpToDate = true, want false")
+	}
+	if got := cr.Status.GetCondition(xpv1.TypeReady).Status; got == corev1.ConditionTrue {
+		t.Fatalf("Ready condition status = %s, want not true", got)
 	}
 }
 
@@ -185,6 +211,28 @@ func TestCreateAlreadyExistsHealthyIsSuccess(t *testing.T) {
 	}
 }
 
+func TestCreateSuccessfulBootstrapMarksReadyOnlyWhenHealthy(t *testing.T) {
+	cr := testBootstrap()
+	e := external{
+		bootstrapFn:             func(context.Context, *v1alpha1.Bootstrap) error { return nil },
+		isBootstrappedHealthyFn: func(context.Context, *v1alpha1.Bootstrap) bool { return true },
+	}
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("e.Create(...): unexpected error: %v", err)
+	}
+	if !cr.Status.AtProvider.Bootstrapped {
+		t.Fatal("cr.Status.AtProvider.Bootstrapped = false, want true")
+	}
+	if cr.Status.AtProvider.BootstrapTime == nil {
+		t.Fatal("cr.Status.AtProvider.BootstrapTime = nil, want timestamp")
+	}
+	if got := cr.Status.GetCondition(xpv1.TypeReady).Status; got != corev1.ConditionTrue {
+		t.Fatalf("Ready condition status = %s, want %s", got, corev1.ConditionTrue)
+	}
+}
+
 func TestCreateAlreadyExistsUnhealthyReturnsError(t *testing.T) {
 	cr := testBootstrap()
 	e := external{
@@ -198,8 +246,51 @@ func TestCreateAlreadyExistsUnhealthyReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("e.Create(...): expected error")
 	}
-	if !strings.Contains(err.Error(), "health could not be verified") {
+	if !strings.Contains(err.Error(), "Talos-side bootstrap completion could not be verified") {
 		t.Fatalf("e.Create(...): got error %q, want health verification context", err.Error())
+	}
+}
+
+func TestIsBootstrappedHealthy(t *testing.T) {
+	tests := map[string]struct {
+		services []talosclient.ServiceInfo
+		err      error
+		want     bool
+	}{
+		"RunningHealthyEtcd": {
+			services: []talosclient.ServiceInfo{{Service: serviceInfo("etcd", "Running", &machineapi.ServiceHealth{Healthy: true})}},
+			want:     true,
+		},
+		"WaitingForFirstNodeBootstrap": {
+			services: []talosclient.ServiceInfo{{Service: serviceInfo("etcd", "Preparing", &machineapi.ServiceHealth{Unknown: true, LastMessage: "waiting: please run talosctl bootstrap"})}},
+			want:     false,
+		},
+		"RunningWithBootstrapRequiredEvent": {
+			services: []talosclient.ServiceInfo{{Service: serviceInfo("etcd", "Running", &machineapi.ServiceHealth{Healthy: true}, "please run talosctl bootstrap")}},
+			want:     false,
+		},
+		"NilHealth": {
+			services: []talosclient.ServiceInfo{{Service: serviceInfo("etcd", "Running", nil)}},
+			want:     false,
+		},
+		"ServiceInfoError": {
+			err:  errors.New("unavailable"),
+			want: false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cr := testBootstrap()
+			e := external{newBootstrapHealthClientFn: func(context.Context, *v1alpha1.Bootstrap) (bootstrapHealthClient, error) {
+				return &fakeBootstrapHealthClient{services: tc.services, err: tc.err}, nil
+			}}
+
+			got := e.isBootstrappedHealthy(context.Background(), cr)
+			if got != tc.want {
+				t.Fatalf("e.isBootstrappedHealthy(...): got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -365,6 +456,33 @@ func testBootstrap() *v1alpha1.Bootstrap {
 			},
 		}},
 	}
+}
+
+type fakeBootstrapHealthClient struct {
+	services []talosclient.ServiceInfo
+	err      error
+}
+
+func (f *fakeBootstrapHealthClient) ServiceInfo(context.Context, string, ...grpc.CallOption) ([]talosclient.ServiceInfo, error) {
+	return f.services, f.err
+}
+
+func (f *fakeBootstrapHealthClient) Close() error { return nil }
+
+func serviceInfo(id, state string, health *machineapi.ServiceHealth, eventMessages ...string) *machineapi.ServiceInfo {
+	service := &machineapi.ServiceInfo{
+		Id:     id,
+		State:  state,
+		Health: health,
+	}
+	if len(eventMessages) > 0 {
+		service.Events = &machineapi.ServiceEvents{}
+		for _, message := range eventMessages {
+			service.Events.Events = append(service.Events.Events, &machineapi.ServiceEvent{Msg: message})
+		}
+	}
+
+	return service
 }
 
 func generateTestCertificates(t *testing.T) (string, string, string) {
