@@ -18,7 +18,9 @@ package secrets
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"time"
 
@@ -29,6 +31,8 @@ import (
 	talosconfig "github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/role"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -177,12 +181,13 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errNewClient)
 	}
 
-	return &external{service: svc.(*TalosSecretsService)}, nil
+	return &external{kube: c.kube, service: svc.(*TalosSecretsService)}, nil
 }
 
 // An ExternalClient observes, then either creates, updates, or deletes an
 // external resource to ensure it reflects the managed resource's desired state.
 type external struct {
+	kube    client.Client
 	service *TalosSecretsService
 }
 
@@ -199,25 +204,26 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, errors.New(errNotSecrets)
 	}
 
-	// Check if secrets already exist in status (locally generated)
-	statusExists := cr.Status.AtProvider.MachineSecrets != nil && cr.Status.AtProvider.ClientConfiguration != nil
-
-	// If secrets don't exist yet, generate them now
-	if !statusExists {
+	var connectionDetails managed.ConnectionDetails
+	if cr.Status.AtProvider.Generated {
+		var err error
+		connectionDetails, err = c.connectionDetailsFromSecret(ctx, cr)
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+	} else {
+		if cr.Spec.WriteConnectionSecretToReference == nil {
+			return managed.ExternalObservation{}, errors.New("writeConnectionSecretToRef is required to persist generated machine secrets")
+		}
 		generatedSecrets, err := c.generateMachineSecrets(cr.Spec.ForProvider.TalosVersion)
 		if err != nil {
 			return managed.ExternalObservation{}, errors.Wrap(err, "failed to generate machine secrets")
 		}
-		populateStatus(cr, generatedSecrets)
-	}
-
-	// Secrets are local resources - always exist after generation
-	connectionDetails, err := connectionDetailsFromStatus(cr)
-	if err != nil {
-		return managed.ExternalObservation{}, err
-	}
-	if cr.Status.AtProvider.MachineSecrets != nil && cr.Status.AtProvider.MachineSecrets.Bundle != "" {
-		connectionDetails["machine_secrets"] = []byte(cr.Status.AtProvider.MachineSecrets.Bundle)
+		connectionDetails, err = connectionDetailsFromGeneratedSecrets(generatedSecrets)
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+		populateStatusMetadata(cr, connectionDetails)
 	}
 
 	// Set Ready condition
@@ -235,17 +241,20 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	if !ok {
 		return managed.ExternalCreation{}, errors.New(errNotSecrets)
 	}
+	if cr.Spec.WriteConnectionSecretToReference == nil {
+		return managed.ExternalCreation{}, errors.New("writeConnectionSecretToRef is required to persist generated machine secrets")
+	}
 
 	// Generate new machine secrets using Talos SDK
 	generatedSecrets, err := c.generateMachineSecrets(cr.Spec.ForProvider.TalosVersion)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, "failed to generate machine secrets")
 	}
-	populateStatus(cr, generatedSecrets)
-	connectionDetails, err := connectionDetailsFromStatus(cr)
+	connectionDetails, err := connectionDetailsFromGeneratedSecrets(generatedSecrets)
 	if err != nil {
 		return managed.ExternalCreation{}, err
 	}
+	populateStatusMetadata(cr, connectionDetails)
 
 	return managed.ExternalCreation{
 		ConnectionDetails: connectionDetails,
@@ -395,52 +404,93 @@ func marshalTrustdInfo(bundle *talossecrets.Bundle) (string, error) {
 	return string(trustdInfoJSON), nil
 }
 
-func populateStatus(cr *v1alpha1.Secrets, generatedSecrets *GeneratedSecretsResult) {
-	cr.Status.AtProvider.MachineSecrets = &v1alpha1.MachineSecretsData{
-		Bundle:            generatedSecrets.Bundle,
-		Structured:        generatedSecrets.MachineSecrets,
-		ClusterSecrets:    generatedSecrets.ClusterSecrets,
-		KubernetesSecrets: generatedSecrets.KubernetesSecrets,
-		TrustdInfo:        generatedSecrets.TrustdInfo,
+func populateStatusMetadata(cr *v1alpha1.Secrets, connectionDetails managed.ConnectionDetails) {
+	cr.Status.AtProvider.Generated = true
+	if cr.Status.AtProvider.GeneratedTime == nil {
+		now := metav1.Now()
+		cr.Status.AtProvider.GeneratedTime = &now
 	}
-	cr.Status.AtProvider.ClientConfiguration = generatedSecrets.ClientConfiguration
+	cr.Status.AtProvider.MachineSecretsHash = hashConnectionDetail(connectionDetails, connectionKeyMachineSecretsBundle)
+	cr.Status.AtProvider.ClientConfigurationHash = hashConnectionDetail(connectionDetails, connectionKeyClientConfiguration)
+	cr.Status.AtProvider.TalosConfigHash = hashConnectionDetail(connectionDetails, connectionKeyTalosConfig)
 }
 
-func connectionDetailsFromStatus(cr *v1alpha1.Secrets) (managed.ConnectionDetails, error) {
+func connectionDetailsFromGeneratedSecrets(generatedSecrets *GeneratedSecretsResult) (managed.ConnectionDetails, error) {
 	connectionDetails := managed.ConnectionDetails{}
 
-	if cr.Status.AtProvider.ClientConfiguration != nil {
-		clientConfigurationJSON, err := marshalBase64ClientConfiguration(cr.Status.AtProvider.ClientConfiguration)
+	if generatedSecrets.ClientConfiguration != nil {
+		clientConfigurationJSON, err := marshalBase64ClientConfiguration(generatedSecrets.ClientConfiguration)
 		if err != nil {
 			return nil, err
 		}
 
-		connectionDetails[connectionKeyCACertificate] = []byte(cr.Status.AtProvider.ClientConfiguration.CACertificate)
-		connectionDetails[connectionKeyClientCertificate] = []byte(cr.Status.AtProvider.ClientConfiguration.ClientCertificate)
-		connectionDetails[connectionKeyClientKey] = []byte(cr.Status.AtProvider.ClientConfiguration.ClientKey)
+		connectionDetails[connectionKeyCACertificate] = []byte(generatedSecrets.ClientConfiguration.CACertificate)
+		connectionDetails[connectionKeyClientCertificate] = []byte(generatedSecrets.ClientConfiguration.ClientCertificate)
+		connectionDetails[connectionKeyClientKey] = []byte(generatedSecrets.ClientConfiguration.ClientKey)
 		connectionDetails[connectionKeyClientConfiguration] = clientConfigurationJSON
 
-		talosConfig, err := marshalTalosConfig(cr.Status.AtProvider.ClientConfiguration)
+		talosConfig, err := marshalTalosConfig(generatedSecrets.ClientConfiguration)
 		if err != nil {
 			return nil, err
 		}
 		connectionDetails[connectionKeyTalosConfig] = talosConfig
 	}
 
-	if cr.Status.AtProvider.MachineSecrets != nil {
-		if cr.Status.AtProvider.MachineSecrets.Structured != nil {
-			structuredJSON, err := json.Marshal(cr.Status.AtProvider.MachineSecrets.Structured)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to marshal structured machine secrets")
-			}
-			connectionDetails[connectionKeyMachineSecrets] = structuredJSON
+	if generatedSecrets.MachineSecrets != nil {
+		structuredJSON, err := json.Marshal(generatedSecrets.MachineSecrets)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to marshal structured machine secrets")
 		}
-		if cr.Status.AtProvider.MachineSecrets.Bundle != "" {
-			connectionDetails[connectionKeyMachineSecretsBundle] = []byte(cr.Status.AtProvider.MachineSecrets.Bundle)
-		}
+		connectionDetails[connectionKeyMachineSecrets] = structuredJSON
+	}
+	if generatedSecrets.Bundle != "" {
+		connectionDetails[connectionKeyMachineSecretsBundle] = []byte(generatedSecrets.Bundle)
 	}
 
 	return connectionDetails, nil
+}
+
+func (c *external) connectionDetailsFromSecret(ctx context.Context, cr *v1alpha1.Secrets) (managed.ConnectionDetails, error) {
+	if cr.Spec.WriteConnectionSecretToReference == nil {
+		return nil, errors.New("generated machine secrets require writeConnectionSecretToRef to reload connection details")
+	}
+	if c.kube == nil {
+		return nil, errors.New("cannot reload generated machine secrets without Kubernetes client")
+	}
+
+	ref := cr.Spec.WriteConnectionSecretToReference
+	secret := &corev1.Secret{}
+	if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ref.Namespace}, secret); err != nil {
+		return nil, errors.Wrapf(err, "cannot get generated machine secrets connection secret %s/%s", ref.Namespace, ref.Name)
+	}
+
+	connectionDetails := managed.ConnectionDetails{}
+	for _, key := range requiredConnectionKeys() {
+		value, ok := secret.Data[key]
+		if !ok {
+			return nil, errors.Errorf("generated machine secrets connection secret %s/%s is missing key %q", ref.Namespace, ref.Name, key)
+		}
+		connectionDetails[key] = value
+	}
+
+	return connectionDetails, nil
+}
+
+func requiredConnectionKeys() []string {
+	return []string{
+		connectionKeyMachineSecrets,
+		connectionKeyMachineSecretsBundle,
+		connectionKeyClientConfiguration,
+		connectionKeyCACertificate,
+		connectionKeyClientCertificate,
+		connectionKeyClientKey,
+		connectionKeyTalosConfig,
+	}
+}
+
+func hashConnectionDetail(connectionDetails managed.ConnectionDetails, key string) string {
+	hash := sha256.Sum256(connectionDetails[key])
+	return hex.EncodeToString(hash[:])
 }
 
 func marshalBase64ClientConfiguration(clientConfiguration *v1alpha1.ClientConfiguration) ([]byte, error) {

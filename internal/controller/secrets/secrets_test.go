@@ -29,7 +29,12 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	talossecrets "github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
@@ -213,13 +218,9 @@ func TestGenerateMachineSecretsUsesAdminClientCertificate(t *testing.T) {
 		t.Fatalf("ClientCertificate did not verify against CACertificate: %v", err)
 	}
 
-	cr := &machinev1alpha1.Secrets{Status: machinev1alpha1.SecretsStatus{AtProvider: machinev1alpha1.SecretsObservation{
-		MachineSecrets:      &machinev1alpha1.MachineSecretsData{Bundle: generated.Bundle, Structured: generated.MachineSecrets},
-		ClientConfiguration: clientConfiguration,
-	}}}
-	details, err := connectionDetailsFromStatus(cr)
+	details, err := connectionDetailsFromGeneratedSecrets(generated)
 	if err != nil {
-		t.Fatalf("connectionDetailsFromStatus(...): %v", err)
+		t.Fatalf("connectionDetailsFromGeneratedSecrets(...): %v", err)
 	}
 
 	var talosConfig struct {
@@ -247,7 +248,7 @@ func TestGenerateMachineSecretsUsesAdminClientCertificate(t *testing.T) {
 	}
 }
 
-func TestConnectionDetailsFromStatus(t *testing.T) {
+func TestConnectionDetailsFromGeneratedSecrets(t *testing.T) {
 	t.Parallel()
 
 	bundle, err := talossecrets.NewBundle(talossecrets.NewClock(), nil)
@@ -267,14 +268,13 @@ func TestConnectionDetailsFromStatus(t *testing.T) {
 		t.Fatalf("json.Marshal(...): %v", err)
 	}
 
-	cr := &machinev1alpha1.Secrets{Status: machinev1alpha1.SecretsStatus{AtProvider: machinev1alpha1.SecretsObservation{
-		MachineSecrets:      &machinev1alpha1.MachineSecretsData{Bundle: string(bundleJSON), Structured: machineSecrets},
+	details, err := connectionDetailsFromGeneratedSecrets(&GeneratedSecretsResult{
+		Bundle:              string(bundleJSON),
+		MachineSecrets:      machineSecrets,
 		ClientConfiguration: clientConfiguration,
-	}}}
-
-	details, err := connectionDetailsFromStatus(cr)
+	})
 	if err != nil {
-		t.Fatalf("connectionDetailsFromStatus(...): %v", err)
+		t.Fatalf("connectionDetailsFromGeneratedSecrets(...): %v", err)
 	}
 
 	if bytes.Equal(details[connectionKeyMachineSecrets], bundleJSON) {
@@ -300,6 +300,79 @@ func TestConnectionDetailsFromStatus(t *testing.T) {
 	}
 	if string(decodedClientCertificate) != clientConfiguration.ClientCertificate {
 		t.Fatal("expected client_configuration.clientCertificate to decode to raw PEM")
+	}
+}
+
+func TestObserveWritesMetadataOnlyStatus(t *testing.T) {
+	t.Parallel()
+
+	cr := &machinev1alpha1.Secrets{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-secrets"},
+		Spec: machinev1alpha1.SecretsSpec{
+			ResourceSpec: xpv1.ResourceSpec{WriteConnectionSecretToReference: &xpv1.SecretReference{Name: "example-connection", Namespace: "default"}},
+		},
+	}
+
+	got, err := (&external{}).Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe(...): %v", err)
+	}
+	if !got.ResourceExists || !got.ResourceUpToDate {
+		t.Fatalf("expected existing and up to date resource, got %+v", got)
+	}
+	if !cr.Status.AtProvider.Generated {
+		t.Fatal("expected generated status metadata")
+	}
+	if cr.Status.AtProvider.GeneratedTime == nil {
+		t.Fatal("expected generated time")
+	}
+	if cr.Status.AtProvider.MachineSecretsHash == "" || cr.Status.AtProvider.ClientConfigurationHash == "" || cr.Status.AtProvider.TalosConfigHash == "" {
+		t.Fatal("expected status hashes")
+	}
+
+	statusJSON, err := json.Marshal(cr.Status.AtProvider)
+	if err != nil {
+		t.Fatalf("json.Marshal(...): %v", err)
+	}
+	for _, forbidden := range []string{"BEGIN PRIVATE KEY", "bootstrap_token", "trustdinfo"} {
+		if bytes.Contains(statusJSON, []byte(forbidden)) {
+			t.Fatalf("status contains sensitive marker %q: %s", forbidden, statusJSON)
+		}
+	}
+	if len(got.ConnectionDetails) == 0 {
+		t.Fatal("expected generated connection details")
+	}
+}
+
+func TestObserveLoadsConnectionDetailsFromSecret(t *testing.T) {
+	t.Parallel()
+
+	generated, err := (&external{}).generateMachineSecrets(nil)
+	if err != nil {
+		t.Fatalf("generateMachineSecrets(...): %v", err)
+	}
+	details, err := connectionDetailsFromGeneratedSecrets(generated)
+	if err != nil {
+		t.Fatalf("connectionDetailsFromGeneratedSecrets(...): %v", err)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("corev1.AddToScheme(...): %v", err)
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "example-connection", Namespace: "default"}, Data: map[string][]byte(details)}
+	cr := &machinev1alpha1.Secrets{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-secrets"},
+		Spec:       machinev1alpha1.SecretsSpec{ResourceSpec: xpv1.ResourceSpec{WriteConnectionSecretToReference: &xpv1.SecretReference{Name: secret.Name, Namespace: secret.Namespace}}},
+		Status:     machinev1alpha1.SecretsStatus{AtProvider: machinev1alpha1.SecretsObservation{Generated: true}},
+	}
+
+	got, err := (&external{kube: fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()}).Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe(...): %v", err)
+	}
+	if diff := cmp.Diff(details, got.ConnectionDetails); diff != "" {
+		t.Errorf("ConnectionDetails: -want, +got:\n%s", diff)
 	}
 }
 

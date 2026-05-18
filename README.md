@@ -84,9 +84,17 @@ metadata:
 spec:
   forProvider:
     talosVersion: v1.8.0
+  writeConnectionSecretToRef:
+    name: example-talos-secrets
+    namespace: default
   providerConfigRef:
     name: default
 ```
+
+Generated machine secrets and client credentials are published to the connection
+secret and are not stored in the `Secrets` resource status. `Configuration`
+resources that use `machineSecretsRef` read the referenced `Secrets` resource's
+Kubernetes connection secret.
 
 Additional examples can be found in the [examples](examples/) directory.
 

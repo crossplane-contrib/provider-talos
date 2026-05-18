@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	talossecrets "github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -94,21 +95,20 @@ func TestObservePublishesMachineConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal(...): %v", err)
 	}
-	machineSecretsData, err := secretscontroller.SecretsBundleToMachineSecrets(bundle)
-	if err != nil {
-		t.Fatalf("secretscontroller.SecretsBundleToMachineSecrets(...): %v", err)
-	}
-
 	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("corev1.AddToScheme(...): %v", err)
+	}
 	if err := machinev1alpha1.SchemeBuilder.AddToScheme(scheme); err != nil {
 		t.Fatalf("machinev1alpha1.SchemeBuilder.AddToScheme(...): %v", err)
 	}
 
+	connectionSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "example-machine-secrets-connection", Namespace: "default"}, Data: map[string][]byte{
+		connectionKeyMachineSecretsBundle: bundleJSON,
+	}}
 	machineSecrets := &machinev1alpha1.Secrets{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-machine-secrets"},
-		Status: machinev1alpha1.SecretsStatus{AtProvider: machinev1alpha1.SecretsObservation{
-			MachineSecrets: &machinev1alpha1.MachineSecretsData{Bundle: string(bundleJSON), Structured: machineSecretsData},
-		}},
+		Spec:       machinev1alpha1.SecretsSpec{ResourceSpec: xpv1.ResourceSpec{WriteConnectionSecretToReference: &xpv1.SecretReference{Name: connectionSecret.Name, Namespace: connectionSecret.Namespace}}},
 	}
 
 	configuration := &machinev1alpha1.Configuration{
@@ -124,7 +124,7 @@ func TestObservePublishesMachineConfiguration(t *testing.T) {
 		}},
 	}
 
-	e := external{kube: fake.NewClientBuilder().WithScheme(scheme).WithObjects(machineSecrets).Build()}
+	e := external{kube: fake.NewClientBuilder().WithScheme(scheme).WithObjects(machineSecrets, connectionSecret).Build()}
 	got, err := e.Observe(context.Background(), configuration)
 	if err != nil {
 		t.Fatalf("e.Observe(...): %v", err)
@@ -166,28 +166,98 @@ func TestGetMachineSecretsBundleFallsBackToRawBundle(t *testing.T) {
 	}
 
 	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("corev1.AddToScheme(...): %v", err)
+	}
 	if err := machinev1alpha1.SchemeBuilder.AddToScheme(scheme); err != nil {
 		t.Fatalf("machinev1alpha1.SchemeBuilder.AddToScheme(...): %v", err)
 	}
 
+	connectionSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "example-machine-secrets-connection", Namespace: "default"}, Data: map[string][]byte{
+		connectionKeyMachineSecretsBundle: bundleJSON,
+	}}
 	machineSecrets := &machinev1alpha1.Secrets{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-machine-secrets"},
-		Status: machinev1alpha1.SecretsStatus{AtProvider: machinev1alpha1.SecretsObservation{
-			MachineSecrets: &machinev1alpha1.MachineSecretsData{Bundle: string(bundleJSON)},
-		}},
+		Spec:       machinev1alpha1.SecretsSpec{ResourceSpec: xpv1.ResourceSpec{WriteConnectionSecretToReference: &xpv1.SecretReference{Name: connectionSecret.Name, Namespace: connectionSecret.Namespace}}},
 	}
 
 	configuration := &machinev1alpha1.Configuration{Spec: machinev1alpha1.ConfigurationSpec{ForProvider: machinev1alpha1.ConfigurationParameters{
 		MachineSecretsRef: &xpv1.Reference{Name: machineSecrets.Name},
 	}}}
 
-	e := external{kube: fake.NewClientBuilder().WithScheme(scheme).WithObjects(machineSecrets).Build()}
+	e := external{kube: fake.NewClientBuilder().WithScheme(scheme).WithObjects(machineSecrets, connectionSecret).Build()}
 	got, err := e.getMachineSecretsBundle(context.Background(), configuration)
 	if err != nil {
 		t.Fatalf("e.getMachineSecretsBundle(...): %v", err)
 	}
 	if got.Cluster.ID != bundle.Cluster.ID {
 		t.Fatalf("expected cluster ID %q, got %q", bundle.Cluster.ID, got.Cluster.ID)
+	}
+}
+
+func TestGetMachineSecretsBundleFallsBackToStructuredSecret(t *testing.T) {
+	t.Parallel()
+
+	bundle, err := talossecrets.NewBundle(talossecrets.NewClock(), nil)
+	if err != nil {
+		t.Fatalf("talossecrets.NewBundle(...): %v", err)
+	}
+	machineSecretsData, err := secretscontroller.SecretsBundleToMachineSecrets(bundle)
+	if err != nil {
+		t.Fatalf("secretscontroller.SecretsBundleToMachineSecrets(...): %v", err)
+	}
+	structuredJSON, err := json.Marshal(machineSecretsData)
+	if err != nil {
+		t.Fatalf("json.Marshal(...): %v", err)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("corev1.AddToScheme(...): %v", err)
+	}
+	if err := machinev1alpha1.SchemeBuilder.AddToScheme(scheme); err != nil {
+		t.Fatalf("machinev1alpha1.SchemeBuilder.AddToScheme(...): %v", err)
+	}
+
+	connectionSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "example-machine-secrets-connection", Namespace: "default"}, Data: map[string][]byte{
+		connectionKeyMachineSecrets: structuredJSON,
+	}}
+	machineSecrets := &machinev1alpha1.Secrets{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-machine-secrets"},
+		Spec:       machinev1alpha1.SecretsSpec{ResourceSpec: xpv1.ResourceSpec{WriteConnectionSecretToReference: &xpv1.SecretReference{Name: connectionSecret.Name, Namespace: connectionSecret.Namespace}}},
+	}
+	configuration := &machinev1alpha1.Configuration{Spec: machinev1alpha1.ConfigurationSpec{ForProvider: machinev1alpha1.ConfigurationParameters{
+		MachineSecretsRef: &xpv1.Reference{Name: machineSecrets.Name},
+	}}}
+
+	e := external{kube: fake.NewClientBuilder().WithScheme(scheme).WithObjects(machineSecrets, connectionSecret).Build()}
+	got, err := e.getMachineSecretsBundle(context.Background(), configuration)
+	if err != nil {
+		t.Fatalf("e.getMachineSecretsBundle(...): %v", err)
+	}
+	if got.Cluster.ID != bundle.Cluster.ID {
+		t.Fatalf("expected cluster ID %q, got %q", bundle.Cluster.ID, got.Cluster.ID)
+	}
+}
+
+func TestGetMachineSecretsBundleRequiresConnectionSecretRef(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	if err := machinev1alpha1.SchemeBuilder.AddToScheme(scheme); err != nil {
+		t.Fatalf("machinev1alpha1.SchemeBuilder.AddToScheme(...): %v", err)
+	}
+	machineSecrets := &machinev1alpha1.Secrets{ObjectMeta: metav1.ObjectMeta{Name: "example-machine-secrets"}}
+	configuration := &machinev1alpha1.Configuration{Spec: machinev1alpha1.ConfigurationSpec{ForProvider: machinev1alpha1.ConfigurationParameters{
+		MachineSecretsRef: &xpv1.Reference{Name: machineSecrets.Name},
+	}}}
+
+	_, err := (&external{kube: fake.NewClientBuilder().WithScheme(scheme).WithObjects(machineSecrets).Build()}).getMachineSecretsBundle(context.Background(), configuration)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "writeConnectionSecretToRef") {
+		t.Fatalf("expected writeConnectionSecretToRef error, got %v", err)
 	}
 }
 
