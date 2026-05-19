@@ -109,26 +109,22 @@ type MachineSecretsKey struct {
 	Key string `json:"key"`
 }
 
-// MachineSecretsData contains the generated machine secrets
-type MachineSecretsData struct {
-	// Bundle contains the full Talos machine secrets bundle in JSON format
-	Bundle string `json:"bundle,omitempty"`
-	// Structured contains the complete machine secrets contract. Values are base64-encoded PEM strings.
-	Structured *MachineSecrets `json:"structured,omitempty"`
-	// ClusterSecrets contains cluster-wide secrets in JSON format
-	ClusterSecrets string `json:"clusterSecrets,omitempty"`
-	// KubernetesSecrets contains Kubernetes-specific secrets in JSON format
-	KubernetesSecrets string `json:"kubernetesSecrets,omitempty"`
-	// TrustdInfo contains TrustD configuration in JSON format
-	TrustdInfo string `json:"trustdInfo,omitempty"`
-}
-
 // SecretsObservation are the observable fields of a Secrets.
 type SecretsObservation struct {
-	// MachineSecrets contains the generated secrets structure
-	MachineSecrets *MachineSecretsData `json:"machineSecrets,omitempty"`
-	// ClientConfiguration contains client configuration for API access
-	ClientConfiguration *ClientConfiguration `json:"clientConfiguration,omitempty"`
+	// Generated indicates machine secrets have been generated and published to connection details.
+	Generated bool `json:"generated,omitempty"`
+	// GeneratedTime is when machine secrets were first generated.
+	// +optional
+	GeneratedTime *metav1.Time `json:"generatedTime,omitempty"`
+	// MachineSecretsHash is a SHA-256 hash of the machine secrets bundle connection detail.
+	// +optional
+	MachineSecretsHash string `json:"machineSecretsHash,omitempty"`
+	// ClientConfigurationHash is a SHA-256 hash of the client configuration connection detail.
+	// +optional
+	ClientConfigurationHash string `json:"clientConfigurationHash,omitempty"`
+	// TalosConfigHash is a SHA-256 hash of the talos config connection detail.
+	// +optional
+	TalosConfigHash string `json:"talosConfigHash,omitempty"`
 }
 
 // A SecretsSpec defines the desired state of a Secrets.

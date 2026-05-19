@@ -25,6 +25,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/feature"
 
 	"github.com/pkg/errors"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -62,6 +63,8 @@ const (
 	errNewClient = "cannot create new Service"
 
 	connectionKeyMachineConfiguration = "machine_configuration"
+	connectionKeyMachineSecrets       = "machine_secrets"
+	connectionKeyMachineSecretsBundle = "machine_secrets_bundle"
 )
 
 // TalosConfigurationService manages Talos machine configurations
@@ -352,23 +355,34 @@ func (c *external) getMachineSecretsBundle(ctx context.Context, cr *machinev1alp
 	if err := c.kube.Get(ctx, types.NamespacedName{Name: cr.Spec.ForProvider.MachineSecretsRef.Name}, secretsResource); err != nil {
 		return nil, errors.Wrap(err, "cannot get referenced machine secrets")
 	}
-	if secretsResource.Status.AtProvider.MachineSecrets == nil {
-		return nil, errors.New("referenced machine secrets do not contain generated data")
+	if secretsResource.Spec.WriteConnectionSecretToReference == nil {
+		return nil, errors.New("referenced machine secrets must define writeConnectionSecretToRef")
 	}
 
-	if secretsResource.Status.AtProvider.MachineSecrets.Structured != nil {
-		return secretscontroller.MachineSecretsToSecretsBundle(secretsResource.Status.AtProvider.MachineSecrets.Structured)
+	ref := secretsResource.Spec.WriteConnectionSecretToReference
+	connectionSecret := &corev1.Secret{}
+	if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ref.Namespace}, connectionSecret); err != nil {
+		return nil, errors.Wrapf(err, "cannot get referenced machine secrets connection secret %s/%s", ref.Namespace, ref.Name)
 	}
 
-	if secretsResource.Status.AtProvider.MachineSecrets.Bundle == "" {
-		return nil, errors.New("referenced machine secrets do not contain structured data or a generated bundle")
+	if bundleJSON, ok := connectionSecret.Data[connectionKeyMachineSecretsBundle]; ok {
+		bundle := &talossecrets.Bundle{Clock: talossecrets.NewClock()}
+		if err := json.Unmarshal(bundleJSON, bundle); err != nil {
+			return nil, errors.Wrap(err, "cannot decode referenced machine secrets bundle")
+		}
+		bundle.Clock = talossecrets.NewClock()
+
+		return bundle, nil
 	}
 
-	bundle := &talossecrets.Bundle{Clock: talossecrets.NewClock()}
-	if err := json.Unmarshal([]byte(secretsResource.Status.AtProvider.MachineSecrets.Bundle), bundle); err != nil {
-		return nil, errors.Wrap(err, "cannot decode referenced machine secrets bundle")
-	}
-	bundle.Clock = talossecrets.NewClock()
+	if structuredJSON, ok := connectionSecret.Data[connectionKeyMachineSecrets]; ok {
+		machineSecrets := &machinev1alpha1.MachineSecrets{}
+		if err := json.Unmarshal(structuredJSON, machineSecrets); err != nil {
+			return nil, errors.Wrap(err, "cannot decode referenced structured machine secrets")
+		}
 
-	return bundle, nil
+		return secretscontroller.MachineSecretsToSecretsBundle(machineSecrets)
+	}
+
+	return nil, errors.Errorf("referenced machine secrets connection secret %s/%s is missing %q or %q", ref.Namespace, ref.Name, connectionKeyMachineSecretsBundle, connectionKeyMachineSecrets)
 }
