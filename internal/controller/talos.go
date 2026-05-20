@@ -21,6 +21,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/crossplane-contrib/provider-talos/internal/controller/bootstrap"
+	"github.com/crossplane-contrib/provider-talos/internal/controller/clusterhealth"
 	"github.com/crossplane-contrib/provider-talos/internal/controller/config"
 	"github.com/crossplane-contrib/provider-talos/internal/controller/configuration"
 	"github.com/crossplane-contrib/provider-talos/internal/controller/configurationapply"
@@ -38,6 +39,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		configuration.Setup,
 		configurationapply.Setup,
 		bootstrap.Setup,
+		clusterhealth.Setup,
 		kubeconfig.Setup,
 		factoryschematic.Setup,
 	} {

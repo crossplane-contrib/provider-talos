@@ -25,6 +25,7 @@ The provider includes support for these resources:
 - **Machine Configuration** - Generate Talos machine configurations for control plane and worker nodes  
 - **Configuration Apply** - Apply machine configurations to Talos nodes
 - **Bootstrap** - Bootstrap Talos nodes to initialize the cluster
+- **Cluster Health** - Wait for Talos cluster health before dependent operations
 - **Cluster Kubeconfig** - Retrieve Kubernetes configuration from Talos clusters
 - **Image Factory Schematic** - Create custom Talos images through the Image Factory
 
@@ -64,7 +65,7 @@ spec:
     source: None
 ```
 
-For machine API resources (ConfigurationApply, Bootstrap, Kubeconfig), supply
+For machine API resources (ConfigurationApply, Bootstrap, ClusterHealth, Kubeconfig), supply
 the Talos client certificates directly on the managed resource via
 `spec.forProvider.clientConfiguration.{caCertificate,clientCertificate,clientKey}`.
 Use the literal value `insecure` on all three fields to target a machine in

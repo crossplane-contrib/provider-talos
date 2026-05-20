@@ -81,3 +81,5 @@ kubectl get configurationapplies.machine.talos.crossplane.io
 ```
 
 All resources should show SYNCED=True or READY=True.
+
+After bootstrapping a control plane, use `examples/cluster/clusterhealth.yaml` as a readiness gate before retrieving kubeconfig with `examples/cluster/kubeconfig.yaml` or creating downstream Kubernetes resources.

@@ -1,0 +1,28 @@
+apiVersion: cluster.talos.crossplane.io/v1alpha1
+kind: ClusterHealth
+metadata:
+  name: example-cluster-health
+spec:
+  forProvider:
+    endpoints:
+      - 192.168.1.100:50000
+    controlPlaneNodes:
+      - 192.168.1.100
+    workerNodes: []
+    skipKubernetesChecks: false
+    clientConfiguration:
+      # These should reference actual PEM certificates from secrets
+      caCertificate: |
+        -----BEGIN CERTIFICATE-----
+        ...
+        -----END CERTIFICATE-----
+      clientCertificate: |
+        -----BEGIN CERTIFICATE-----
+        ...
+        -----END CERTIFICATE-----
+      clientKey: |
+        -----BEGIN PRIVATE KEY-----
+        ...
+        -----END PRIVATE KEY-----
+  providerConfigRef:
+    name: default
