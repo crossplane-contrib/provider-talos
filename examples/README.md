@@ -25,6 +25,7 @@ This directory contains comprehensive examples for all Talos Crossplane Provider
 - `machine/bootstrap.yaml` - Bootstrap cluster on control plane node
 
 ### Cluster Operations
+- `cluster/clusterhealth.yaml` - Wait for Talos cluster health before dependent operations
 - `cluster/kubeconfig.yaml` - Retrieve cluster kubeconfig
 
 ## Complete Workflows
@@ -47,7 +48,8 @@ This demonstrates the full lifecycle:
 3. Generate machine configurations
 4. Apply configurations to nodes  
 5. Bootstrap cluster
-6. Retrieve kubeconfig
+6. Wait for cluster health
+7. Retrieve kubeconfig
 
 ## Usage Notes
 
@@ -95,7 +97,8 @@ Resources should be created in this order:
 4. **Configuration** - Machine configurations
 5. **ConfigurationApply** - Apply to nodes
 6. **Bootstrap** - Initialize cluster
-7. **Kubeconfig** - Access cluster
+7. **ClusterHealth** - Wait for Talos and Kubernetes health checks
+8. **Kubeconfig** - Access cluster
 
 ## Troubleshooting
 
